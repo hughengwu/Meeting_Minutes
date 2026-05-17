@@ -9,6 +9,8 @@ mkdir -p "$PID_DIR" "$LOG_DIR"
 
 source "$ROOT_DIR/.venv/bin/activate"
 
+export MODELSCOPE_CACHE="$ROOT_DIR/data/models"
+
 # ── Redis ──────────────────────────────────────────────────
 if redis-cli ping &>/dev/null 2>&1; then
     echo "[redis]   已在运行"
