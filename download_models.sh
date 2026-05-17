@@ -6,50 +6,36 @@ cd "$ROOT_DIR"
 
 source venv/bin/activate
 
-# 从 .env 读取配置
-export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-HF_TOKEN=""
-if [ -f .env ]; then
-    _val=$(grep '^HF_TOKEN=' .env | head -1 | cut -d= -f2-)
-    if [ -n "$_val" ] && [ "$_val" != "填入你的HuggingFace_Token" ]; then
-        HF_TOKEN="$_val"
-        export HF_TOKEN
-    fi
-fi
-
 echo "========================================"
-echo "  模型下载脚本"
-echo "  镜像源: $HF_ENDPOINT"
-echo "  HF_TOKEN: ${HF_TOKEN:+已设置 ✓}${HF_TOKEN:-未设置 (将跳过 pyannote)}"
+echo "  模型下载脚本（FunASR + ModelScope）"
 echo "========================================"
 echo ""
-
-# ── 1. Whisper large-v3 ─────────────────────────────────────────────
-echo "[1/4] Whisper large-v3  (约 3 GB)"
-hf download Systran/faster-whisper-large-v3
-echo "✓ Whisper 完成"
+echo "将下载以下模型（首次约 1.6 GB，保存到 ~/.cache/modelscope）："
+echo "  • paraformer-zh   — 中文语音识别主模型 (~900 MB)"
+echo "  • fsmn-vad        — 语音端点检测 (~100 MB)"
+echo "  • ct-punc         — 标点恢复 (~500 MB)"
+echo "  • cam++           — 说话人分离 (~100 MB)"
 echo ""
 
-# ── 2. 中文对齐模型 ──────────────────────────────────────────────────
-echo "[2/4] 中文语音对齐模型  (约 1.3 GB)"
-hf download jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn
-echo "✓ 对齐模型完成"
-echo ""
+python3 - <<'PYEOF'
+import sys
 
-# ── 3 & 4. pyannote 说话人分离（需要 HF_TOKEN）────────────────────────
-if [ -n "$HF_TOKEN" ]; then
-    echo "[3/4] pyannote/speaker-diarization-3.1  (约 70 MB)"
-    hf download pyannote/speaker-diarization-3.1 --token "$HF_TOKEN"
-    echo "✓ 说话人分离模型完成"
-    echo ""
+try:
+    from funasr import AutoModel
+except ImportError:
+    print("错误: funasr 未安装，请先运行 setup.sh 或 pip install funasr modelscope")
+    sys.exit(1)
 
-    echo "[4/4] pyannote/segmentation-3.0  (约 70 MB)"
-    hf download pyannote/segmentation-3.0 --token "$HF_TOKEN"
-    echo "✓ 音频分割模型完成"
-else
-    echo "[3/4] 跳过 pyannote（未设置 HF_TOKEN）"
-    echo "[4/4] 跳过 pyannote（未设置 HF_TOKEN）"
-fi
+print("[1/1] 加载模型（将自动下载缺失的模型文件）...")
+model = AutoModel(
+    model="paraformer-zh",
+    vad_model="fsmn-vad",
+    punc_model="ct-punc",
+    spk_model="cam++",
+)
+del model
+print("✓ 所有模型下载完成")
+PYEOF
 
 echo ""
 echo "========================================"
