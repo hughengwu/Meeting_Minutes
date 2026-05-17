@@ -18,6 +18,9 @@ dependencies = [
     "modelscope>=1.11.0",
 ]
 
+[tool.uv]
+link-mode = "copy"
+
 # PyTorch CUDA 12.1 版本来源
 [[tool.uv.index]]
 name = "pytorch-cu121"
