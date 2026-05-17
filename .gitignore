@@ -1,0 +1,14 @@
+.env
+data/uploads/
+data/models/
+data/meetings.db
+data/logs/
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+dist/
+.DS_Store
+.logs/
+.pids/
+venv/
