@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   deleteMeeting, getMeeting, getJob,
@@ -33,6 +33,43 @@ export default function Meeting() {
   const [renameModal, setRenameModal] = useState(null)
   const [renameDraft, setRenameDraft] = useState('')
   const renameInputRef = useRef(null)
+
+  // 音频同步
+  const [currentTime, setCurrentTime] = useState(0)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const audioPlayerRef = useRef(null)
+  const blockRefs = useRef({})
+  const scrollTimerRef = useRef(null)
+
+  const activeId = useMemo(() => {
+    if (!meeting?.utterances) return null
+    const u = meeting.utterances.find(u => currentTime >= u.start && currentTime < u.end)
+    return u?.id ?? null
+  }, [currentTime, meeting?.utterances])
+
+  // 自动滚动到当前激活段
+  useEffect(() => {
+    if (!autoScroll || activeId === null) return
+    blockRefs.current[activeId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [activeId, autoScroll])
+
+  // 用户手动滚动时暂停自动滚动 3 秒
+  useEffect(() => {
+    const onScroll = () => {
+      setAutoScroll(false)
+      clearTimeout(scrollTimerRef.current)
+      scrollTimerRef.current = setTimeout(() => setAutoScroll(true), 3000)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      clearTimeout(scrollTimerRef.current)
+    }
+  }, [])
+
+  const seekTo = useCallback((time) => {
+    audioPlayerRef.current?.seek(time)
+  }, [])
 
   const loadMeeting = useCallback(() =>
     getMeeting(id).then((r) => {
@@ -169,7 +206,13 @@ export default function Meeting() {
       <div className="max-w-3xl mx-auto px-4 py-6">
         {isProcessing && <ProcessingStatus status={meeting.status} job={job} />}
 
-        {isDone && <AudioPlayer meetingId={id} />}
+        {isDone && (
+          <AudioPlayer
+            ref={audioPlayerRef}
+            meetingId={id}
+            onTimeUpdate={setCurrentTime}
+          />
+        )}
 
         {/* Tab nav */}
         <div className="flex gap-0 mb-5 border-b border-gray-200">
@@ -216,11 +259,17 @@ export default function Meeting() {
               {(meeting.utterances || []).map((u) => (
                 <TranscriptBlock
                   key={u.id}
+                  ref={(el) => {
+                    if (el) blockRefs.current[u.id] = el
+                    else delete blockRefs.current[u.id]
+                  }}
                   utterance={u}
                   speakerName={getSpeakerName(u.speaker)}
                   color={getColor(u.speaker)}
                   onSpeakerClick={() => openRename(u.speaker)}
                   onTextSave={saveUtterance}
+                  isActive={u.id === activeId}
+                  onSeek={seekTo}
                 />
               ))}
             </div>

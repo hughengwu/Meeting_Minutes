@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { audioUrl } from '../api'
 
 function fmtTime(s) {
@@ -7,12 +7,20 @@ function fmtTime(s) {
   return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 }
 
-export default function AudioPlayer({ meetingId }) {
+const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate }, ref) {
   const audioRef = useRef(null)
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
   const [dragging, setDragging] = useState(false)
+
+  useImperativeHandle(ref, () => ({
+    seek(time) {
+      if (!audioRef.current) return
+      audioRef.current.currentTime = time
+      setCurrent(time)
+    },
+  }))
 
   const toggle = () => {
     const el = audioRef.current
@@ -40,7 +48,11 @@ export default function AudioPlayer({ meetingId }) {
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
-        onTimeUpdate={(e) => !dragging && setCurrent(e.target.currentTime)}
+        onTimeUpdate={(e) => {
+          const t = e.target.currentTime
+          if (!dragging) setCurrent(t)
+          onTimeUpdate?.(t)
+        }}
         onLoadedMetadata={(e) => setDuration(e.target.duration)}
       />
 
@@ -94,4 +106,6 @@ export default function AudioPlayer({ meetingId }) {
       </div>
     </div>
   )
-}
+})
+
+export default AudioPlayer

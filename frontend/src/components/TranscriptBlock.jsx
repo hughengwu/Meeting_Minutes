@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { forwardRef, useState } from 'react'
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60)
@@ -6,7 +6,10 @@ function formatTime(seconds) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-export default function TranscriptBlock({ utterance, speakerName, color, onSpeakerClick, onTextSave }) {
+const TranscriptBlock = forwardRef(function TranscriptBlock(
+  { utterance, speakerName, color, onSpeakerClick, onTextSave, isActive, onSeek },
+  ref
+) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(utterance.text)
 
@@ -18,7 +21,14 @@ export default function TranscriptBlock({ utterance, speakerName, color, onSpeak
   }
 
   return (
-    <div className="flex gap-4 px-4 py-3 group hover:bg-slate-50 transition-colors">
+    <div
+      ref={ref}
+      className={`flex gap-4 px-4 py-3 group transition-all duration-300 border-l-2 ${
+        isActive
+          ? 'bg-blue-50 border-blue-400'
+          : 'border-transparent hover:bg-slate-50'
+      }`}
+    >
       {/* Speaker + time */}
       <div className="flex-shrink-0 w-20 pt-0.5 text-right">
         <button
@@ -29,7 +39,15 @@ export default function TranscriptBlock({ utterance, speakerName, color, onSpeak
         >
           {speakerName}
         </button>
-        <div className="text-xs text-gray-400 mt-1">
+        <div
+          className={`text-xs mt-1 transition-colors ${
+            isActive
+              ? 'text-blue-500 font-medium cursor-pointer'
+              : 'text-gray-400 cursor-pointer hover:text-blue-500'
+          }`}
+          onClick={() => onSeek?.(utterance.start)}
+          title="点击跳转到此处"
+        >
           {formatTime(utterance.start)}
         </div>
       </div>
@@ -50,7 +68,9 @@ export default function TranscriptBlock({ utterance, speakerName, color, onSpeak
           />
         ) : (
           <p
-            className="text-gray-800 text-sm leading-relaxed cursor-text rounded px-1 py-0.5 -ml-1 hover:bg-gray-100 transition-colors"
+            className={`text-sm leading-relaxed cursor-text rounded px-1 py-0.5 -ml-1 transition-colors ${
+              isActive ? 'text-gray-900' : 'text-gray-800 hover:bg-gray-100'
+            }`}
             onClick={() => { setDraft(utterance.text); setEditing(true) }}
             title="点击编辑"
           >
@@ -60,4 +80,6 @@ export default function TranscriptBlock({ utterance, speakerName, color, onSpeak
       </div>
     </div>
   )
-}
+})
+
+export default TranscriptBlock
