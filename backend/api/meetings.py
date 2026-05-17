@@ -1,10 +1,11 @@
 import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -156,14 +157,62 @@ def delete_meeting(meeting_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{meeting_id}/audio")
-def get_audio(meeting_id: str, db: Session = Depends(get_db)):
+def get_audio(meeting_id: str, request: Request, db: Session = Depends(get_db)):
     m = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if not m or not m.audio_path:
         raise HTTPException(status_code=404, detail="音频不存在")
     if not os.path.exists(m.audio_path):
         raise HTTPException(status_code=404, detail="音频文件已被删除")
-    content_type, _ = mimetypes.guess_type(m.audio_path)
-    return FileResponse(m.audio_path, media_type=content_type or "audio/mpeg")
+
+    file_path = m.audio_path
+    file_size = os.path.getsize(file_path)
+    content_type, _ = mimetypes.guess_type(file_path)
+    content_type = content_type or "audio/mpeg"
+
+    range_header = request.headers.get("range", "")
+    match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+
+    if match:
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else file_size - 1
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        def stream_range():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    data = f.read(min(65536, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(
+            stream_range(),
+            status_code=206,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(length),
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    def stream_full():
+        with open(file_path, "rb") as f:
+            while chunk := f.read(65536):
+                yield chunk
+
+    return StreamingResponse(
+        stream_full(),
+        headers={
+            "Content-Type": content_type,
+            "Content-Length": str(file_size),
+            "Accept-Ranges": "bytes",
+        },
+    )
 
 
 @router.get("/{meeting_id}/logs")

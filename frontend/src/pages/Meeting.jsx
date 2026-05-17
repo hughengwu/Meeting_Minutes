@@ -50,7 +50,7 @@ export default function Meeting() {
   // 自动滚动到当前激活段
   useEffect(() => {
     if (!autoScroll || activeId === null) return
-    blockRefs.current[activeId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    blockRefs.current[activeId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [activeId, autoScroll])
 
   // 用户手动滚动时暂停自动滚动 3 秒
@@ -163,7 +163,7 @@ export default function Meeting() {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200">
+      <div className="sticky top-0 z-20 bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center gap-3">
           <button
             onClick={() => navigate('/')}
@@ -203,16 +203,21 @@ export default function Meeting() {
         </div>
       </div>
 
+      {/* Sticky audio player — sticks just below the header (top-14 = 3.5rem = header height) */}
+      {isDone && (
+        <div className="sticky top-14 z-10 bg-slate-50 border-b border-gray-100">
+          <div className="max-w-3xl mx-auto px-4 pt-4 pb-1">
+            <AudioPlayer
+              ref={audioPlayerRef}
+              meetingId={id}
+              onTimeUpdate={setCurrentTime}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="max-w-3xl mx-auto px-4 py-6">
         {isProcessing && <ProcessingStatus status={meeting.status} job={job} />}
-
-        {isDone && (
-          <AudioPlayer
-            ref={audioPlayerRef}
-            meetingId={id}
-            onTimeUpdate={setCurrentTime}
-          />
-        )}
 
         {/* Tab nav */}
         <div className="flex gap-0 mb-5 border-b border-gray-200">

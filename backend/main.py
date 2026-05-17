@@ -1,4 +1,5 @@
 import os
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -77,6 +78,16 @@ async def upload_audio(
     async with aiofiles.open(file_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             await f.write(chunk)
+
+    # Move moov atom to front so browsers can seek without downloading entire file
+    if ext in {".m4a", ".mp4", ".mov"}:
+        optimized = file_path + ".tmp"
+        r = subprocess.run(
+            ["ffmpeg", "-i", file_path, "-c", "copy", "-movflags", "+faststart", "-y", optimized],
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            os.replace(optimized, file_path)
 
     db = SessionLocal()
     try:

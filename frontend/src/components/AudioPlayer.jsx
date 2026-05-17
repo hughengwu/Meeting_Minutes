@@ -9,9 +9,10 @@ function fmtTime(s) {
 
 const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate }, ref) {
   const audioRef   = useRef(null)
-  const barRef     = useRef(null)
-  const durRef     = useRef(0)       // duration 的 ref 版本，供事件回调同步读取
+  const barRef      = useRef(null)
+  const durRef      = useRef(0)      // duration 的 ref 版本，供事件回调同步读取
   const draggingRef = useRef(false)  // 用 ref 而非 state，避免闭包拿到过期值
+  const dragTimeRef = useRef(0)      // 拖动期间实时记录目标时间，mouseup 直接用
 
   const [playing,  setPlaying]  = useState(false)
   const [current,  setCurrent]  = useState(0)
@@ -37,20 +38,20 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
 
     // 立即更新可视位置
     const t0 = timeFromX(e.clientX)
-    if (t0 !== null) setCurrent(t0)
+    if (t0 !== null) { setCurrent(t0); dragTimeRef.current = t0 }
 
     const onMove = (e) => {
       const t = timeFromX(e.clientX)
-      if (t !== null) setCurrent(t)   // 只更新视觉，不中途 seek 避免音频抖动
+      if (t !== null) { setCurrent(t); dragTimeRef.current = t }
     }
 
-    const onUp = (e) => {
+    const onUp = () => {
       draggingRef.current = false
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
 
-      const t = timeFromX(e.clientX)
-      if (t !== null && audioRef.current) {
+      const t = dragTimeRef.current
+      if (audioRef.current) {
         audioRef.current.currentTime = t
         setCurrent(t)
         onTimeUpdate?.(t)
@@ -65,7 +66,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
   const pct = duration ? (current / duration) * 100 : 0
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5 shadow-sm">
+    <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
       <audio
         ref={audioRef}
         src={audioUrl(meetingId)}

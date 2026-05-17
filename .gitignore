@@ -1,15 +1,24 @@
+# 运行时数据
 .env
 data/uploads/
 data/models/
 data/meetings.db
 data/logs/
+
+# 日志与进程文件
+.logs/
+.pids/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-node_modules/
-dist/
-.DS_Store
-.logs/
-.pids/
 .venv/
 venv/
+
+# Node
+node_modules/
+dist/
+
+# 系统
+.DS_Store
