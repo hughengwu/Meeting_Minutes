@@ -76,5 +76,46 @@ def process_audio(
             "text":    text,
         })
 
+    raw_count = len(segments)
+    segments = _merge_segments(segments)
+    log(f"合并前 {raw_count} 段 → 合并后 {len(segments)} 段")
+
     log(f"处理完成，共 {len(segments)} 条发言")
     return segments
+
+
+def _merge_segments(
+    segments: list[dict],
+    max_gap: float = 2.0,       # 同说话人间隔 ≤ 2s 则合并
+    max_duration: float = 60.0, # 合并后单段最长不超过 60s
+    min_duration: float = 1.0,  # 不足 1s 的极短段吸收到上一段
+) -> list[dict]:
+    """合并同一说话人的相邻碎片段，并吸收极短段，减少过度分割。"""
+    if not segments:
+        return segments
+
+    # 第一步：合并同说话人相邻段
+    merged = [dict(segments[0])]
+    for seg in segments[1:]:
+        prev = merged[-1]
+        gap = seg["start"] - prev["end"]
+        would_be = seg["end"] - prev["start"]
+
+        if (seg["speaker"] == prev["speaker"]
+                and gap <= max_gap
+                and would_be <= max_duration):
+            prev["end"] = seg["end"]
+            prev["text"] = prev["text"] + seg["text"]
+        else:
+            merged.append(dict(seg))
+
+    # 第二步：将不足 min_duration 的极短段吸收到上一段
+    result = []
+    for seg in merged:
+        if result and (seg["end"] - seg["start"]) < min_duration:
+            result[-1]["end"] = seg["end"]
+            result[-1]["text"] = result[-1]["text"] + seg["text"]
+        else:
+            result.append(seg)
+
+    return result
