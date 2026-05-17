@@ -18,6 +18,13 @@ Base = declarative_base()
 def init_db():
     import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    # 兼容旧数据库：按需添加新列
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    existing = {c["name"] for c in inspector.get_columns("meetings")}
+    with engine.begin() as conn:
+        if "hotwords" not in existing:
+            conn.execute(text("ALTER TABLE meetings ADD COLUMN hotwords TEXT"))
 
 
 def get_db():

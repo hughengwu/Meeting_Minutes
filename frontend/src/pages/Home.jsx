@@ -103,6 +103,48 @@ function matchFilter(m, filter) {
   return m.status === filter
 }
 
+function UploadModal({ file, onConfirm, onCancel }) {
+  const [hotwords, setHotwords] = useState('')
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+        <h2 className="text-base font-semibold text-gray-900 mb-1">上传音频</h2>
+        <p className="text-sm text-gray-400 mb-4 truncate">{file.name}</p>
+
+        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+          会议背景 / 热词
+          <span className="ml-1.5 text-xs font-normal text-gray-400">（可选，用于提升识别准确率）</span>
+        </label>
+        <textarea
+          value={hotwords}
+          onChange={(e) => setHotwords(e.target.value)}
+          placeholder={'可填写会议主题、参与者姓名、专业术语等，空格或换行分隔\n例如：张三 李四 Kubernetes 微服务 Q2营收'}
+          className="w-full h-28 text-sm border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 placeholder-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          autoFocus
+        />
+        <p className="text-xs text-gray-400 mt-1.5 mb-5">
+          热词会引导模型优先识别这些词汇；背景描述帮助理解语境，两者均可混写。
+        </p>
+
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => onConfirm(hotwords)}
+            className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+          >
+            开始处理
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Home() {
   const navigate = useNavigate()
   const fileRef = useRef(null)
@@ -112,6 +154,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState('')
+  const [pendingFile, setPendingFile] = useState(null)
 
   const load = () => getMeetings().then((r) => setMeetings(r.data)).catch(() => {})
 
@@ -121,18 +164,29 @@ export default function Home() {
     return () => clearInterval(t)
   }, [])
 
-  const handleFile = async (file) => {
+  const pickFile = (file) => {
     if (!file) return
+    setPendingFile(file)
+  }
+
+  const handleConfirm = async (hotwords) => {
+    const file = pendingFile
+    setPendingFile(null)
     setUploadError('')
     setUploading(true)
     setUploadProgress(0)
     try {
-      const res = await uploadAudio(file, setUploadProgress)
+      const res = await uploadAudio(file, hotwords, setUploadProgress)
       navigate(`/meeting/${res.data.meeting_id}`, { state: { jobId: res.data.job_id } })
     } catch (e) {
       setUploadError(e.response?.data?.detail || '上传失败，请重试')
       setUploading(false)
     }
+  }
+
+  const handleCancel = () => {
+    setPendingFile(null)
+    fileRef.current && (fileRef.current.value = '')
   }
 
   const handleDelete = async (id) => {
@@ -152,6 +206,13 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {pendingFile && (
+        <UploadModal
+          file={pendingFile}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+      )}
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -174,7 +235,7 @@ export default function Home() {
             type="file"
             className="hidden"
             accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.webm"
-            onChange={(e) => handleFile(e.target.files[0])}
+            onChange={(e) => pickFile(e.target.files[0])}
           />
         </div>
       </div>
@@ -209,7 +270,7 @@ export default function Home() {
               ${dragging ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-white'}`}
             onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
             onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]) }}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); pickFile(e.dataTransfer.files[0]) }}
             onClick={() => fileRef.current?.click()}
           >
             <div className="text-5xl mb-4">🎙️</div>
@@ -225,7 +286,7 @@ export default function Home() {
               ${dragging ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-transparent hover:border-gray-200 text-gray-400'}`}
             onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
             onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]) }}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); pickFile(e.dataTransfer.files[0]) }}
           >
             <p className="text-sm">{dragging ? '松开以上传' : '拖拽音频到此处快速上传'}</p>
           </div>

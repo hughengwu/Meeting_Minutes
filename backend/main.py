@@ -4,7 +4,7 @@ from pathlib import Path
 
 import aiofiles
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -56,14 +56,17 @@ def _recover_pending_jobs():
             job.error_message = None
             meeting.status = "pending"
             db.commit()
-            process_audio_task.delay(meeting.id, meeting.audio_path, job.id)
+            process_audio_task.delay(meeting.id, meeting.audio_path, job.id, meeting.hotwords or "")
             print(f"[startup] re-queued job {job.id} for meeting {meeting.id}")
     finally:
         db.close()
 
 
 @app.post("/api/upload")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(
+    file: UploadFile = File(...),
+    hotwords: str = Form(""),
+):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext}")
@@ -83,6 +86,7 @@ async def upload_audio(file: UploadFile = File(...)):
             audio_path=file_path,
             status="pending",
             speaker_names={},
+            hotwords=hotwords.strip() or None,
         )
         db.add(meeting)
 
@@ -93,5 +97,5 @@ async def upload_audio(file: UploadFile = File(...)):
     finally:
         db.close()
 
-    process_audio_task.delay(meeting_id, file_path, job_id)
+    process_audio_task.delay(meeting_id, file_path, job_id, hotwords.strip())
     return {"meeting_id": meeting_id, "job_id": job_id}

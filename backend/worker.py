@@ -17,7 +17,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @celery_app.task(name="process_audio")
-def process_audio_task(meeting_id: str, audio_path: str, job_id: str):
+def process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
     from database import SessionLocal
     from models import Job, Meeting, Utterance
     from pipeline import process_audio
@@ -54,10 +54,9 @@ def process_audio_task(meeting_id: str, audio_path: str, job_id: str):
         meeting.status = "processing"
         db.commit()
 
-        hf_token = os.getenv("HF_TOKEN") or None
         segments = process_audio(
             audio_path,
-            hf_token,
+            hotwords=hotwords,
             on_progress=set_progress,
             log_func=write_log,
         )

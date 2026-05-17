@@ -2,9 +2,10 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api' })
 
-export const uploadAudio = (file, onProgress) => {
+export const uploadAudio = (file, hotwords, onProgress) => {
   const form = new FormData()
   form.append('file', file)
+  if (hotwords) form.append('hotwords', hotwords)
   return api.post('/upload', form, {
     onUploadProgress: (e) => onProgress(Math.round((e.loaded * 100) / e.total)),
   })

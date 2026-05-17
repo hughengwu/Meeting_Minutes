@@ -12,6 +12,7 @@ class Meeting(Base):
     audio_path = Column(String)
     status = Column(String, default="pending")  # pending / processing / done / error
     speaker_names = Column(JSON, default={})    # {"SPEAKER_00": "张三", ...}
+    hotwords = Column(Text, nullable=True)       # 用户填写的会议背景/热词
     created_at = Column(DateTime, server_default=func.now())
 
 

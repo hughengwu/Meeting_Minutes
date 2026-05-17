@@ -1,5 +1,4 @@
 import gc
-import os
 from datetime import datetime
 from typing import Callable
 
@@ -11,6 +10,7 @@ def process_audio(
     hf_token: str | None = None,   # 保留参数兼容性，FunASR 不需要 HF Token
     on_progress: Callable[[int, str], None] | None = None,
     log_func: Callable[[str], None] | None = None,
+    hotwords: str = "",
 ) -> list[dict]:
 
     def log(msg: str):
@@ -27,9 +27,6 @@ def process_audio(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log(f"设备: {device}")
-
-    # 从环境变量读取热词（逗号分隔），用于提升专有名词识别率
-    hotword = os.getenv("FUNASR_HOTWORDS", "")
 
     # ── 加载 FunASR 流水线 ────────────────────────────────────────────
     progress(15, "加载模型（paraformer-zh + cam++）...")
@@ -48,9 +45,9 @@ def process_audio(
     # ── 转录 + 说话人分离（一次调用完成）────────────────────────────
     progress(30, "语音识别 + 说话人分离中...")
     kwargs = dict(input=audio_path, batch_size_s=300)
-    if hotword:
-        kwargs["hotword"] = hotword
-        log(f"热词: {hotword}")
+    if hotwords:
+        kwargs["hotword"] = hotwords
+        log(f"热词/背景: {hotwords[:100]}")
 
     result = model.generate(**kwargs)
 
