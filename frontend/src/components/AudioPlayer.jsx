@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { audioUrl } from '../api'
 
 function fmtTime(s) {
@@ -9,8 +9,11 @@ function fmtTime(s) {
 
 const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate }, ref) {
   const audioRef = useRef(null)
-  const [playing, setPlaying] = useState(false)
-  const [current, setCurrent] = useState(0)
+  const barRef   = useRef(null)
+  const durRef   = useRef(0)          // 始终保存最新 duration，供 document 事件读取
+
+  const [playing,  setPlaying]  = useState(false)
+  const [current,  setCurrent]  = useState(0)
   const [duration, setDuration] = useState(0)
   const [dragging, setDragging] = useState(false)
 
@@ -22,19 +25,35 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
     },
   }))
 
-  const toggle = () => {
-    const el = audioRef.current
-    if (!el) return
-    playing ? el.pause() : el.play()
-  }
+  // 用 document 级别的 mousemove / mouseup 捕获拖动，鼠标移出进度条也有效
+  useEffect(() => {
+    if (!dragging) return
 
-  const seek = (e) => {
-    const el = audioRef.current
-    if (!el || !duration) return
-    const rect = e.currentTarget.getBoundingClientRect()
+    const onMove = (e) => {
+      const rect = barRef.current?.getBoundingClientRect()
+      if (!rect || !durRef.current) return
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      const time = ratio * durRef.current
+      setCurrent(time)
+      if (audioRef.current) audioRef.current.currentTime = time
+    }
+    const onUp = () => setDragging(false)
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup',   onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup',   onUp)
+    }
+  }, [dragging])
+
+  const handleBarClick = (e) => {
+    const rect = barRef.current?.getBoundingClientRect()
+    if (!rect || !durRef.current) return
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    el.currentTime = ratio * duration
-    setCurrent(ratio * duration)
+    const time = ratio * durRef.current
+    if (audioRef.current) audioRef.current.currentTime = time
+    setCurrent(time)
   }
 
   const pct = duration ? (current / duration) * 100 : 0
@@ -49,17 +68,21 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         onTimeUpdate={(e) => {
+          if (dragging) return          // 拖动期间忽略 audio 自身的 timeupdate
           const t = e.target.currentTime
-          if (!dragging) setCurrent(t)
+          setCurrent(t)
           onTimeUpdate?.(t)
         }}
-        onLoadedMetadata={(e) => setDuration(e.target.duration)}
+        onLoadedMetadata={(e) => {
+          setDuration(e.target.duration)
+          durRef.current = e.target.duration
+        }}
       />
 
       <div className="flex items-center gap-3">
         {/* Play/Pause */}
         <button
-          onClick={toggle}
+          onClick={() => playing ? audioRef.current?.pause() : audioRef.current?.play()}
           className="w-9 h-9 flex-shrink-0 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center text-white transition-colors shadow-sm"
         >
           {playing ? (
@@ -80,20 +103,13 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
 
         {/* Progress bar */}
         <div
-          className="flex-1 h-1.5 bg-gray-200 rounded-full cursor-pointer relative group"
-          onClick={seek}
+          ref={barRef}
+          className="flex-1 h-1.5 bg-gray-200 rounded-full cursor-pointer relative group select-none"
+          onClick={handleBarClick}
           onMouseDown={() => setDragging(true)}
-          onMouseUp={() => setDragging(false)}
-          onMouseMove={(e) => {
-            if (!dragging) return
-            const rect = e.currentTarget.getBoundingClientRect()
-            const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-            setCurrent(ratio * duration)
-            if (audioRef.current) audioRef.current.currentTime = ratio * duration
-          }}
         >
           <div
-            className="h-1.5 bg-blue-500 rounded-full relative"
+            className="h-1.5 bg-blue-500 rounded-full relative pointer-events-none"
             style={{ width: `${pct}%` }}
           >
             <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-blue-600 rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity" />

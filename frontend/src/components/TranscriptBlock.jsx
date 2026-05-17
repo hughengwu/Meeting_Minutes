@@ -68,11 +68,12 @@ const TranscriptBlock = forwardRef(function TranscriptBlock(
           />
         ) : (
           <p
-            className={`text-sm leading-relaxed cursor-text rounded px-1 py-0.5 -ml-1 transition-colors ${
+            className={`text-sm leading-relaxed cursor-pointer rounded px-1 py-0.5 -ml-1 transition-colors ${
               isActive ? 'text-gray-900' : 'text-gray-800 hover:bg-gray-100'
             }`}
-            onClick={() => { setDraft(utterance.text); setEditing(true) }}
-            title="点击编辑"
+            onClick={() => onSeek?.(utterance.start)}
+            onDoubleClick={() => { setDraft(utterance.text); setEditing(true) }}
+            title="单击跳转 · 双击编辑"
           >
             {utterance.text}
           </p>
