@@ -20,5 +20,8 @@ venv/
 node_modules/
 dist/
 
+# Claude Code
+.claude/
+
 # 系统
 .DS_Store
