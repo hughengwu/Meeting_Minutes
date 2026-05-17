@@ -4,7 +4,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
-source venv/bin/activate
+source "$ROOT_DIR/.venv/bin/activate"
 
 echo "========================================"
 echo "  模型下载脚本（FunASR + ModelScope）"
@@ -23,7 +23,7 @@ import sys
 try:
     from funasr import AutoModel
 except ImportError:
-    print("错误: funasr 未安装，请先运行 setup.sh 或 pip install funasr modelscope")
+    print("错误: funasr 未安装，请先运行 ./setup.sh")
     sys.exit(1)
 
 print("[1/1] 加载模型（将自动下载缺失的模型文件）...")

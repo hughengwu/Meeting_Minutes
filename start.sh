@@ -7,7 +7,7 @@ LOG_DIR="$ROOT_DIR/.logs"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
-source "$ROOT_DIR/venv/bin/activate"
+source "$ROOT_DIR/.venv/bin/activate"
 
 # ── Redis ──────────────────────────────────────────────────
 if redis-cli ping &>/dev/null 2>&1; then

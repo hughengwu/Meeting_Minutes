@@ -1,0 +1,29 @@
+[project]
+name = "meeting-notes"
+version = "0.1.0"
+description = "会议语音转录系统"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.111.0",
+    "uvicorn[standard]==0.30.0",
+    "celery==5.4.0",
+    "redis==5.0.4",
+    "sqlalchemy==2.0.30",
+    "python-multipart==0.0.9",
+    "aiofiles==23.2.1",
+    "python-dotenv==1.0.1",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    "funasr>=1.1.0",
+    "modelscope>=1.11.0",
+]
+
+# PyTorch CUDA 12.1 版本来源
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu121" }]
+torchaudio = [{ index = "pytorch-cu121" }]
