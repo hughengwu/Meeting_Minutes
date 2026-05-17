@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { audioUrl } from '../api'
 
 function fmtTime(s) {
@@ -8,14 +8,14 @@ function fmtTime(s) {
 }
 
 const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate }, ref) {
-  const audioRef = useRef(null)
-  const barRef   = useRef(null)
-  const durRef   = useRef(0)          // 始终保存最新 duration，供 document 事件读取
+  const audioRef   = useRef(null)
+  const barRef     = useRef(null)
+  const durRef     = useRef(0)       // duration 的 ref 版本，供事件回调同步读取
+  const draggingRef = useRef(false)  // 用 ref 而非 state，避免闭包拿到过期值
 
   const [playing,  setPlaying]  = useState(false)
   const [current,  setCurrent]  = useState(0)
   const [duration, setDuration] = useState(0)
-  const [dragging, setDragging] = useState(false)
 
   useImperativeHandle(ref, () => ({
     seek(time) {
@@ -25,35 +25,41 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
     },
   }))
 
-  // 用 document 级别的 mousemove / mouseup 捕获拖动，鼠标移出进度条也有效
-  useEffect(() => {
-    if (!dragging) return
+  const timeFromX = (clientX) => {
+    const rect = barRef.current?.getBoundingClientRect()
+    if (!rect || !durRef.current) return null
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * durRef.current
+  }
+
+  const handleBarMouseDown = (e) => {
+    e.preventDefault()
+    draggingRef.current = true
+
+    // 立即更新可视位置
+    const t0 = timeFromX(e.clientX)
+    if (t0 !== null) setCurrent(t0)
 
     const onMove = (e) => {
-      const rect = barRef.current?.getBoundingClientRect()
-      if (!rect || !durRef.current) return
-      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-      const time = ratio * durRef.current
-      setCurrent(time)
-      if (audioRef.current) audioRef.current.currentTime = time
+      const t = timeFromX(e.clientX)
+      if (t !== null) setCurrent(t)   // 只更新视觉，不中途 seek 避免音频抖动
     }
-    const onUp = () => setDragging(false)
 
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup',   onUp)
-    return () => {
+    const onUp = (e) => {
+      draggingRef.current = false
       document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup',   onUp)
-    }
-  }, [dragging])
+      document.removeEventListener('mouseup', onUp)
 
-  const handleBarClick = (e) => {
-    const rect = barRef.current?.getBoundingClientRect()
-    if (!rect || !durRef.current) return
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    const time = ratio * durRef.current
-    if (audioRef.current) audioRef.current.currentTime = time
-    setCurrent(time)
+      const t = timeFromX(e.clientX)
+      if (t !== null && audioRef.current) {
+        audioRef.current.currentTime = t
+        setCurrent(t)
+        onTimeUpdate?.(t)
+      }
+    }
+
+    // 挂在 document 上：鼠标移出进度条也能正确响应
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
   }
 
   const pct = duration ? (current / duration) * 100 : 0
@@ -68,7 +74,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         onTimeUpdate={(e) => {
-          if (dragging) return          // 拖动期间忽略 audio 自身的 timeupdate
+          if (draggingRef.current) return   // 拖动期间忽略，防止与拖动位置冲突
           const t = e.target.currentTime
           setCurrent(t)
           onTimeUpdate?.(t)
@@ -105,8 +111,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({ meetingId, onTimeUpdate },
         <div
           ref={barRef}
           className="flex-1 h-1.5 bg-gray-200 rounded-full cursor-pointer relative group select-none"
-          onClick={handleBarClick}
-          onMouseDown={() => setDragging(true)}
+          onMouseDown={handleBarMouseDown}
         >
           <div
             className="h-1.5 bg-blue-500 rounded-full relative pointer-events-none"
