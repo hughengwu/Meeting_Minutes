@@ -50,7 +50,7 @@ export default function Meeting() {
   // 自动滚动到当前激活段
   useEffect(() => {
     if (!autoScroll || activeId === null) return
-    blockRefs.current[activeId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    blockRefs.current[activeId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [activeId, autoScroll])
 
   // 用户手动滚动时暂停自动滚动 3 秒
