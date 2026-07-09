@@ -166,8 +166,17 @@ def get_audio(meeting_id: str, request: Request, db: Session = Depends(get_db)):
 
     file_path = m.audio_path
     file_size = os.path.getsize(file_path)
-    content_type, _ = mimetypes.guess_type(file_path)
-    content_type = content_type or "audio/mpeg"
+    ext = os.path.splitext(file_path)[1].lower()
+    _MIME = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".mp4": "audio/mp4",
+        ".flac": "audio/flac",
+        ".ogg": "audio/ogg",
+        ".webm": "audio/webm",
+    }
+    content_type = _MIME.get(ext) or mimetypes.guess_type(file_path)[0] or "audio/mpeg"
 
     range_header = request.headers.get("range", "")
     match = re.match(r"bytes=(\d+)-(\d*)", range_header)

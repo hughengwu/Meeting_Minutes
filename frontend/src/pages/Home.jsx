@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { deleteMeeting, getMeetings, uploadAudio } from '../api'
+import ModelManager from '../components/ModelManager'
 
 function formatDate(str) {
   if (!str) return ''
@@ -103,13 +104,23 @@ function matchFilter(m, filter) {
   return m.status === filter
 }
 
+const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm'])
+function isVideo(filename) {
+  const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase()
+  return VIDEO_EXTS.has(ext)
+}
+
 function UploadModal({ file, onConfirm, onCancel }) {
   const [hotwords, setHotwords] = useState('')
+  const video = isVideo(file.name)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-1">上传音频</h2>
-        <p className="text-sm text-gray-400 mb-4 truncate">{file.name}</p>
+        <h2 className="text-base font-semibold text-gray-900 mb-1">上传{video ? '视频' : '音频'}</h2>
+        <p className="text-sm text-gray-400 mb-1 truncate">{file.name}</p>
+        {video && (
+          <p className="text-xs text-blue-500 mb-3">视频将自动提取音轨；若使用「SenseVoice 多语言」模型，非中文内容会自动翻译为中文。</p>
+        )}
 
         <label className="block text-sm font-medium text-gray-700 mb-1.5">
           会议背景 / 热词
@@ -155,6 +166,7 @@ export default function Home() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState('')
   const [pendingFile, setPendingFile] = useState(null)
+  const [showModelManager, setShowModelManager] = useState(false)
 
   const load = () => getMeetings().then((r) => setMeetings(r.data)).catch(() => {})
 
@@ -213,6 +225,8 @@ export default function Home() {
           onCancel={handleCancel}
         />
       )}
+      {showModelManager && <ModelManager onClose={() => setShowModelManager(false)} />}
+
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -222,19 +236,30 @@ export default function Home() {
             </div>
             <span className="font-semibold text-gray-900 text-sm">会议记录</span>
           </div>
-          <button
-            onClick={() => !uploading && fileRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors font-medium"
-          >
-            <span className="text-base leading-none">+</span>
-            <span>上传音频</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowModelManager(true)}
+              title="模型设置"
+              className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path fillRule="evenodd" clipRule="evenodd" d="M7.06 1.4A.75.75 0 017.8.75h.4a.75.75 0 01.74.65l.13.9a5.27 5.27 0 011.3.54l.77-.48a.75.75 0 01.96.13l.28.28a.75.75 0 01.13.96l-.48.77c.22.4.4.84.54 1.3l.9.13a.75.75 0 01.65.74v.4a.75.75 0 01-.65.74l-.9.13a5.27 5.27 0 01-.54 1.3l.48.77a.75.75 0 01-.13.96l-.28.28a.75.75 0 01-.96.13l-.77-.48c-.4.22-.84.4-1.3.54l-.13.9a.75.75 0 01-.74.65h-.4a.75.75 0 01-.74-.65l-.13-.9a5.27 5.27 0 01-1.3-.54l-.77.48a.75.75 0 01-.96-.13l-.28-.28a.75.75 0 01-.13-.96l.48-.77a5.27 5.27 0 01-.54-1.3l-.9-.13A.75.75 0 011.25 8.2v-.4a.75.75 0 01.65-.74l.9-.13c.14-.46.32-.9.54-1.3l-.48-.77a.75.75 0 01.13-.96l.28-.28a.75.75 0 01.96-.13l.77.48c.4-.22.84-.4 1.3-.54l.13-.9zM8 10a2 2 0 100-4 2 2 0 000 4z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => !uploading && fileRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors font-medium"
+            >
+              <span className="text-base leading-none">+</span>
+              <span>上传音/视频</span>
+            </button>
+          </div>
           <input
             ref={fileRef}
             type="file"
             className="hidden"
-            accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.webm"
+            accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.mkv,.avi,.mov,.webm"
             onChange={(e) => pickFile(e.target.files[0])}
           />
         </div>
@@ -245,13 +270,17 @@ export default function Home() {
         {uploading && (
           <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-700">上传中...</span>
-              <span className="text-sm text-gray-500">{uploadProgress}%</span>
+              <span className="text-sm text-gray-700">
+                {uploadProgress < 100 ? '上传中...' : '服务器处理中，请稍候...'}
+              </span>
+              {uploadProgress < 100 && (
+                <span className="text-sm text-gray-500">{uploadProgress}%</span>
+              )}
             </div>
             <div className="w-full bg-gray-100 rounded-full h-1.5">
               <div
-                className="bg-blue-500 h-1.5 rounded-full transition-all"
-                style={{ width: `${uploadProgress}%` }}
+                className={`h-1.5 rounded-full transition-all ${uploadProgress < 100 ? 'bg-blue-500' : 'bg-blue-400 animate-pulse w-full'}`}
+                style={uploadProgress < 100 ? { width: `${uploadProgress}%` } : undefined}
               />
             </div>
           </div>
@@ -274,8 +303,8 @@ export default function Home() {
             onClick={() => fileRef.current?.click()}
           >
             <div className="text-5xl mb-4">🎙️</div>
-            <p className="text-gray-700 font-medium mb-1">拖拽音频文件到此处</p>
-            <p className="text-gray-400 text-sm">支持 MP3 · WAV · M4A · FLAC · OGG · MP4</p>
+            <p className="text-gray-700 font-medium mb-1">拖拽音频或视频文件到此处</p>
+            <p className="text-gray-400 text-sm">音频：MP3 · WAV · M4A · FLAC · OGG　视频：MP4 · MKV · AVI · MOV</p>
           </div>
         )}
 
@@ -288,7 +317,7 @@ export default function Home() {
             onDragLeave={() => setDragging(false)}
             onDrop={(e) => { e.preventDefault(); setDragging(false); pickFile(e.dataTransfer.files[0]) }}
           >
-            <p className="text-sm">{dragging ? '松开以上传' : '拖拽音频到此处快速上传'}</p>
+            <p className="text-sm">{dragging ? '松开以上传' : '拖拽音/视频到此处快速上传'}</p>
           </div>
         )}
 

@@ -4,7 +4,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
-source "$ROOT_DIR/.venv/bin/activate"
+PYTHON="$ROOT_DIR/.venv/bin/python"
 
 export MODELSCOPE_CACHE="$ROOT_DIR/data/models"
 mkdir -p "$MODELSCOPE_CACHE"
@@ -20,7 +20,7 @@ echo "  • ct-punc         — 标点恢复 (~500 MB)"
 echo "  • cam++           — 说话人分离 (~100 MB)"
 echo ""
 
-python3 - <<'PYEOF'
+"$PYTHON" - <<'PYEOF'
 import sys
 
 try:

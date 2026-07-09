@@ -8,6 +8,7 @@ data/logs/
 # 日志与进程文件
 .logs/
 .pids/
+dump.rdb
 
 # Python
 __pycache__/

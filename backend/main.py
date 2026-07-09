@@ -1,5 +1,5 @@
+import asyncio
 import os
-import subprocess
 import uuid
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from api import jobs, meetings
+from api import jobs, meetings, models as model_api
 from database import DATA_DIR, SessionLocal, init_db
 from models import Job, Meeting
 from worker import process_audio_task
@@ -26,9 +26,11 @@ app.add_middleware(
 
 app.include_router(meetings.router, prefix="/api/meetings")
 app.include_router(jobs.router, prefix="/api/jobs")
+app.include_router(model_api.router, prefix="/api/models")
 
 UPLOAD_DIR = str(DATA_DIR / "uploads")
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".webm"}
+_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm"}
+ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"} | _VIDEO_EXTENSIONS
 
 
 @app.on_event("startup")
@@ -68,6 +70,12 @@ async def upload_audio(
     file: UploadFile = File(...),
     hotwords: str = Form(""),
 ):
+    from model_manager import get_active_model, is_model_downloaded, MODELS
+    active = get_active_model()
+    if not is_model_downloaded(active):
+        name = MODELS.get(active, {}).get("name", active)
+        raise HTTPException(status_code=400, detail=f"模型「{name}」尚未下载，请先在设置中下载")
+
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext}")
@@ -79,15 +87,17 @@ async def upload_audio(
         while chunk := await file.read(1024 * 1024):
             await f.write(chunk)
 
-    # Move moov atom to front so browsers can seek without downloading entire file
-    if ext in {".m4a", ".mp4", ".mov"}:
+    if ext == ".m4a":
+        # Move moov atom to front so browsers can seek without downloading the entire file
         optimized = file_path + ".tmp"
-        r = subprocess.run(
-            ["ffmpeg", "-i", file_path, "-c", "copy", "-movflags", "+faststart", "-y", optimized],
-            capture_output=True,
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", file_path, "-c", "copy", "-movflags", "+faststart", "-y", optimized,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        if r.returncode == 0:
+        if await proc.wait() == 0:
             os.replace(optimized, file_path)
+        # Video files: audio extraction happens in the worker as the first step
 
     db = SessionLocal()
     try:

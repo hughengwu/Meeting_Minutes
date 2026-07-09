@@ -16,17 +16,21 @@ dependencies = [
     "torchaudio==2.5.1",
     "funasr>=1.1.0",
     "modelscope>=1.11.0",
+    "fireredasr>=0.0.2",
+    "huggingface-hub>=0.20.0",
+    "langdetect>=1.0.9",
 ]
 
 [tool.uv]
 link-mode = "copy"
 
-# PyTorch CUDA 12.1 版本来源
+# PyTorch CUDA 12.1 版本来源（仅 Linux/GPU 环境使用；
+# macOS 走默认 PyPI 的 arm64 构建，自带 MPS/CPU 支持）
 [[tool.uv.index]]
 name = "pytorch-cu121"
 url = "https://download.pytorch.org/whl/cu121"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu121" }]
-torchaudio = [{ index = "pytorch-cu121" }]
+torch = [{ index = "pytorch-cu121", marker = "sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cu121", marker = "sys_platform == 'linux'" }]
