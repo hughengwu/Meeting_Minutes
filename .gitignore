@@ -4,6 +4,8 @@ data/uploads/
 data/models/
 data/meetings.db
 data/logs/
+data/config.json
+data/download_status/
 
 # 日志与进程文件
 .logs/

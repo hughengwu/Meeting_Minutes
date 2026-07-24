@@ -25,3 +25,8 @@ export const getMeetingLogs = (id) => api.get(`/meetings/${id}/logs`)
 export const getJob = (id) => api.get(`/jobs/${id}`)
 
 export const audioUrl = (meetingId) => `/api/meetings/${meetingId}/audio`
+
+export const getModels = () => api.get('/models/')
+export const downloadModel = (modelId) => api.post(`/models/${modelId}/download`)
+export const getModelStatus = (modelId) => api.get(`/models/${modelId}/status`)
+export const setActiveModel = (modelId) => api.post('/models/active', { model_id: modelId })

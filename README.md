@@ -6,7 +6,7 @@
 
 | 层级 | 组件 |
 |------|------|
-| 语音识别 | FunASR Paraformer-zh（中文优化） |
+| 语音识别 | 可切换：FireRedASR-AED（默认）/ FunASR Paraformer-zh / FunASR SenseVoice（多语言） |
 | 说话人分离 | cam++（内置，无需 HuggingFace Token） |
 | 任务队列 | 进程内线程队列（标准库 threading + queue，单机单 GPU 场景无需 Celery/Redis） |
 | 后端 | FastAPI + SQLite |
@@ -93,13 +93,25 @@
 
 ---
 
+## 模型管理
+
+首页「模型管理」面板可以下载/切换语音识别模型：
+
+- **FireRedASR-AED**（默认）：中文识别精度更高，从 HuggingFace 下载（约 350MB），显存需求约 8GB
+- **Paraformer-zh**：阿里 FunASR，显存需求约 4GB，即 `download_models.sh`/`download_models.ps1` 下载的模型
+- **SenseVoice 多语言**：支持中/英/日/韩/粤，非中文自动翻译成中文，显存需求约 4GB
+
+未下载的模型无法被激活；上传音频时会先检查当前激活模型是否已下载。下载/激活状态保存在 `data/config.json` 和 `data/download_status/`（均为本机运行时数据，不纳入版本控制）。
+
+---
+
 ## 使用流程
 
 ### 1. 上传录音
 
 首页点击「上传音频」，选择文件后弹出确认框。
 
-支持格式：`MP3` `WAV` `M4A` `FLAC` `OGG` `MP4` `WEBM`
+支持格式：`MP3` `WAV` `M4A` `FLAC` `OGG` `MP4` `MKV` `AVI` `MOV` `WEBM`（视频文件会自动提取音轨）
 
 ### 2. 填写会议背景（可选，推荐）
 
@@ -185,28 +197,33 @@ Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同
 ├── backend/
 │   ├── api/
 │   │   ├── meetings.py     # 会议 CRUD、音频流、导出
-│   │   └── jobs.py         # 任务状态查询
+│   │   ├── jobs.py         # 任务状态查询
+│   │   └── models.py       # 模型列表/下载/切换接口
 │   ├── main.py             # 上传接口、启动恢复逻辑
-│   ├── pipeline.py         # FunASR 转录流水线
-│   ├── worker.py           # 进程内线程队列，异步执行转录任务
+│   ├── pipeline.py         # 转录流水线（按激活模型分发）
+│   ├── worker.py           # 进程内线程队列，异步执行转录/下载任务
+│   ├── model_manager.py    # 模型注册表、下载状态、激活模型
 │   ├── models.py           # SQLAlchemy 数据模型
 │   └── database.py         # 数据库初始化与迁移
 ├── frontend/
 │   └── src/
 │       ├── api/index.js    # 后端接口封装
 │       ├── pages/
-│       │   ├── Home.jsx    # 会议列表 + 上传
+│       │   ├── Home.jsx    # 会议列表 + 上传 + 模型管理入口
 │       │   └── Meeting.jsx # 会议详情 + 播放器
 │       └── components/
 │           ├── AudioPlayer.jsx      # 音频播放器（支持拖动 seek）
 │           ├── TranscriptBlock.jsx  # 单条转录段落
 │           ├── ExportPanel.jsx      # 导出面板
 │           ├── LogViewer.jsx        # 处理日志查看
-│           └── ProcessingStatus.jsx # 处理进度显示
+│           ├── ProcessingStatus.jsx # 处理进度显示
+│           └── ModelManager.jsx     # 模型下载/切换面板
 ├── data/                   # 运行时数据（gitignore）
 │   ├── uploads/            # 上传的音频文件
 │   ├── logs/               # 每次转录的处理日志
-│   ├── models/             # FunASR 模型缓存
+│   ├── models/             # ASR 模型缓存
+│   ├── download_status/    # 各模型下载进度
+│   ├── config.json         # 当前激活模型
 │   └── meetings.db         # SQLite 数据库
 ├── pyproject.toml          # Python 依赖（uv 管理）
 ├── download_models.py      # 模型下载逻辑（被 .sh / .ps1 共用）
