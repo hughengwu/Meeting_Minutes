@@ -10,6 +10,7 @@ mkdir -p "$PID_DIR" "$LOG_DIR"
 source "$ROOT_DIR/.venv/bin/activate"
 
 export MODELSCOPE_CACHE="$ROOT_DIR/data/models"
+export PYTHONUNBUFFERED=1
 
 # ── Backend（含转录后台线程，无需单独 worker 进程）───────────
 echo "[backend] 启动中 → http://localhost:8000"

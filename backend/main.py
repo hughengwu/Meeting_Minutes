@@ -39,6 +39,8 @@ def startup():
     init_db()
     start_worker()
     _recover_pending_jobs()
+    from model_manager import recover_stale_downloads
+    recover_stale_downloads()
 
 
 def _recover_pending_jobs():

@@ -2,6 +2,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,52 @@ from database import DATA_DIR
 
 LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _patch_sentencepiece_for_unicode_paths():
+    """sentencepiece 的 Load(model_file=...) 底层调用 LoadFromFile()，在 Windows 上
+    用窄字符串按系统代码页打开文件；当项目路径含非 ASCII 字符（本仓库目录名里就有
+    中文"IT项目"）时会报 'Not found: ... Error #2'，即便 Python 自己用
+    os.path.exists()/open() 能正常读到同一个文件。
+    这里把加载逻辑换成"Python 读字节 + LoadFromSerializedProto"，完全绕开
+    sentencepiece 自身的文件打开逻辑，改用 Python 的 Unicode 路径处理。
+
+    注意：SentencePieceProcessor 同时暴露 Load / load / Init 三个入口，FunASR 用的是
+    小写 self.sp.load(path)，因此必须把这几个别名都替换掉，只补 Load 无效。
+    SenseVoice、FireRedASR 的分词器都是 sentencepiece 模型，加载都会走到这里，
+    在后端启动时打一次补丁即可全局生效。
+    """
+    try:
+        import sentencepiece as spm
+    except ImportError:
+        return
+
+    def _patched_load(self, model_file=None, model_proto=None):
+        if model_file and model_proto:
+            raise RuntimeError("model_file and model_proto must be exclusive.")
+        if model_proto:
+            return self.LoadFromSerializedProto(model_proto)
+        with open(model_file, "rb") as f:
+            return self.LoadFromSerializedProto(f.read())
+
+    spm.SentencePieceProcessor.Load = _patched_load
+    spm.SentencePieceProcessor.load = _patched_load
+
+    # Init(model_file=...) 是新版 API 的构造入口，内部也会走 LoadFromFile；
+    # 若存在则一并替换，只覆盖 model_file 这一条路径，其余参数原样透传。
+    _orig_init = getattr(spm.SentencePieceProcessor, "Init", None)
+    if _orig_init is not None:
+        def _patched_init(self, model_file=None, model_proto=None, *args, **kwargs):
+            if model_file is not None and model_proto is None:
+                with open(model_file, "rb") as f:
+                    model_proto = f.read()
+                model_file = None
+            return _orig_init(self, model_file=model_file, model_proto=model_proto, *args, **kwargs)
+        spm.SentencePieceProcessor.Init = _patched_init
+        spm.SentencePieceProcessor.init = _patched_init
+
+
+_patch_sentencepiece_for_unicode_paths()
 
 # 单进程内的任务队列，替代 Celery + Redis：
 # 本项目单机单 GPU 运行，任务本就串行处理（原 concurrency=1），
@@ -173,26 +220,37 @@ def _download_model_task(model_id: str):
         set_download_status(model_id, {"status": "done", "progress": 100, "error": None, "label": "已下载"})
         return
 
-    set_download_status(model_id, {"status": "downloading", "progress": 5, "error": None, "label": "初始化..."})
-    print(f"[download] 开始下载 {model_id}")
+    print(f"[download] 开始下载 {model_id}", flush=True)
 
-    try:
-        Path(m["local_dir"]).mkdir(parents=True, exist_ok=True)
+    # funasr 的 AutoModel() 在文件刚下载完时偶尔会立刻尝试加载分词器等文件，
+    # 出现过 "Not found: ...bpe.model" 这类瞬时竞争错误——原封不动重试一次
+    # 就能成功（modelscope 会跳过已下载完整的文件，重试代价很小）。
+    attempts = 2
+    for attempt in range(1, attempts + 1):
+        set_download_status(model_id, {
+            "status": "downloading", "progress": 5, "error": None,
+            "label": "初始化..." if attempt == 1 else f"初始化...（第 {attempt} 次尝试）",
+        })
+        try:
+            Path(m["local_dir"]).mkdir(parents=True, exist_ok=True)
 
-        if model_id == "firered-aed":
-            _download_firered(model_id, m)
-        elif model_id == "paraformer":
-            _download_paraformer(model_id, m)
-        elif model_id == "sensevoice-multilingual":
-            _download_sensevoice_multilingual(model_id, m)
+            if model_id == "firered-aed":
+                _download_firered(model_id, m)
+            elif model_id == "paraformer":
+                _download_paraformer(model_id, m)
+            elif model_id == "sensevoice-multilingual":
+                _download_sensevoice_multilingual(model_id, m)
 
-        set_download_status(model_id, {"status": "done", "progress": 100, "error": None, "label": "下载完成"})
-        print(f"[download] {model_id} 下载完成")
+            set_download_status(model_id, {"status": "done", "progress": 100, "error": None, "label": "下载完成"})
+            print(f"[download] {model_id} 下载完成", flush=True)
+            return
 
-    except Exception as e:
-        set_download_status(model_id, {"status": "error", "progress": 0, "error": str(e), "label": "下载失败"})
-        print(f"[download] {model_id} 下载失败: {e}")
-        raise
+        except Exception as e:
+            print(f"[download] {model_id} 第 {attempt} 次尝试失败: {e}", flush=True)
+            if attempt == attempts:
+                set_download_status(model_id, {"status": "error", "progress": 0, "error": str(e), "label": "下载失败"})
+                raise
+            time.sleep(3)
 
 
 def _download_firered(model_id: str, m: dict):

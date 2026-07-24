@@ -22,6 +22,8 @@ if (-not (Test-Path $Vite)) {
 }
 
 $env:MODELSCOPE_CACHE = Join-Path $RootDir "data\models"
+$env:PYTHONUNBUFFERED = "1"
+$env:PYTHONUTF8 = "1"
 
 function Start-Tracked($name, $filePath, $argList, $workDir) {
     $stdout = Join-Path $LogDir "$name.log"

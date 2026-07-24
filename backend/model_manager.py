@@ -25,13 +25,17 @@ MODELS: dict[str, dict] = {
         "description": "阿里达摩院 FunASR，CER 较高，显存约 4GB",
         "vram_gb": 4,
         "modelscope_ids": [
-            "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+            "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
             "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
             "iic/punc_ct-transformer_cn-en-common-vocab471067-large",
             "iic/speech_campplus_sv_zh-cn_16k-common",
         ],
-        "local_dir": DATA_DIR / "models" / "hub",
-        "check_file": "models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/model.pt",
+        # funasr 1.3.x 里 model="paraformer-zh" 实际解析到 iic/speech_seaco_paraformer_large_...，
+        # 而 modelscope 的 MODELSCOPE_CACHE 下实际落地目录是 <cache>/models/<namespace>/<name>
+        # （没有 "hub" 这一层）。这里的路径必须和 worker.py::_download_paraformer 的真实下载
+        # 落点完全一致，否则 is_model_downloaded() 会永远判定为「未下载」。
+        "local_dir": DATA_DIR / "models" / "models",
+        "check_file": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/model.pt",
     },
     "sensevoice-multilingual": {
         "id": "sensevoice-multilingual",
@@ -39,8 +43,8 @@ MODELS: dict[str, dict] = {
         "tag": "多语言",
         "description": "阿里 FunASR SenseVoice Small，支持中/英/日/韩/粤，非中文自动翻译，约 550MB",
         "vram_gb": 4,
-        "local_dir": DATA_DIR / "models" / "hub",
-        "check_file": "models/iic/SenseVoiceSmall/model.pt",
+        "local_dir": DATA_DIR / "models" / "models",
+        "check_file": "iic/SenseVoiceSmall/model.pt",
         "translation_dir": DATA_DIR / "models" / "opus-mt-en-zh",
     },
 }
@@ -89,3 +93,23 @@ def get_download_status(model_id: str) -> dict:
 
 def set_download_status(model_id: str, status: dict) -> None:
     (_STATUS_DIR / f"{model_id}.json").write_text(json.dumps(status))
+
+
+def recover_stale_downloads() -> None:
+    """后端启动时校正 download_status：下载线程随进程重启而消失，不会留下
+    "done"/"error" 之外的终态，所以重启后仍是 "downloading" 的状态必然是
+    上次异常退出（或被重启打断）遗留下来的，永远不会再有进度——且
+    start_download() 见到 "downloading" 就会拒绝重新入队，导致彻底卡死。
+    这里按实际文件是否存在来校正：已下载则标记完成（自愈之前路径判断错误
+    导致的假「未完成」），否则清空状态，让前端重新出现「下载」按钮。
+    """
+    for model_id in MODELS:
+        status = get_download_status(model_id)
+        if status.get("status") != "downloading":
+            continue
+        if is_model_downloaded(model_id):
+            set_download_status(model_id, {
+                "status": "done", "progress": 100, "error": None, "label": "已下载",
+            })
+        else:
+            set_download_status(model_id, {})
