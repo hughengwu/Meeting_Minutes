@@ -8,25 +8,38 @@
 |------|------|
 | 语音识别 | FunASR Paraformer-zh（中文优化） |
 | 说话人分离 | cam++（内置，无需 HuggingFace Token） |
-| 任务队列 | Celery + Redis |
+| 任务队列 | 进程内线程队列（标准库 threading + queue，单机单 GPU 场景无需 Celery/Redis） |
 | 后端 | FastAPI + SQLite |
 | 前端 | React + Tailwind CSS + Vite |
-| 运行环境 | WSL2 + NVIDIA CUDA |
+| 运行环境 | Windows 原生 或 WSL2 / Linux + NVIDIA CUDA |
 
 ---
 
 ## 环境要求
 
-- Windows + WSL2（Ubuntu）
+- Windows 10/11（原生 PowerShell 即可，也可用 WSL2/Linux）
 - NVIDIA GPU，显存 ≥ 6 GB（推荐 8 GB+）
-- CUDA 12.1 驱动（Windows 侧安装即可）
+- CUDA 12.1 驱动
 - 磁盘空间：模型约 1.6 GB，Python 依赖约 4 GB
 
 ---
 
 ## 首次安装
 
-在 WSL 终端中执行：
+### 方式一：Windows 原生（PowerShell）
+
+```powershell
+# 若提示脚本被禁止运行，先执行一次：
+# Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+# 1. 安装 ffmpeg / uv / Python 3.12 环境 / 前端依赖
+.\setup.ps1
+
+# 2. 下载 FunASR 模型（约 1.6 GB，仅需一次）
+.\download_models.ps1
+```
+
+### 方式二：WSL2（Ubuntu）/ Linux
 
 ```bash
 # 1. 安装系统依赖、Python 3.12 环境、前端依赖
@@ -36,15 +49,27 @@
 ./download_models.sh
 ```
 
-`setup.sh` 自动完成：
-- 安装 ffmpeg、redis、git 等系统包
+`setup.ps1` / `setup.sh` 自动完成：
+- 安装 ffmpeg、git 等系统依赖（Windows 下通过 winget，Linux 下通过 apt）
 - 安装 [uv](https://github.com/astral-sh/uv) 并创建 Python 3.12 虚拟环境（`.venv`）
 - 安装所有 Python 依赖（含 PyTorch CUDA 12.1）
 - 安装前端 Node.js 依赖
 
+不再需要安装 Redis：任务队列已改为进程内线程队列（见下方"任务队列"说明），Windows 原生环境无需额外中间件。
+
 ---
 
 ## 启动 / 停止 / 重启
+
+**Windows 原生：**
+
+```powershell
+.\start.ps1                  # 启动所有服务（后台进程，立即返回）
+.\stop.ps1                   # 停止所有服务
+.\stop.ps1; .\start.ps1      # 重启
+```
+
+**WSL2 / Linux：**
 
 ```bash
 ./start.sh                  # 启动所有服务
@@ -56,7 +81,15 @@
 - **前端**：http://localhost:5173
 - **后端 API**：http://localhost:8000/docs
 
-`start.sh` 会阻塞终端（Ctrl+C 或另开终端执行 `./stop.sh` 来停止）。日志写入 `.logs/` 目录。
+`start.sh` 会阻塞终端（Ctrl+C 或另开终端执行 `./stop.sh` 来停止）；`start.ps1` 则以后台进程启动后立即返回终端，用 `.\stop.ps1` 停止。两者日志都写入 `.logs/` 目录。
+
+---
+
+## 任务队列说明
+
+音频转录是 CPU/GPU 密集型任务，需要在后台异步处理，避免阻塞上传请求。本项目在同一 Python 进程内用标准库 `threading` + `queue.Queue` 实现了一个单工作线程的任务队列（`backend/worker.py`），串行处理转录任务——这与原先 Celery 单 worker、`concurrency=1` 的效果一致，但去掉了 Redis 依赖，因此在 Windows 原生环境下也能直接运行（无需 WSL/Docker/Memurai 等）。
+
+代价：转录任务和 API 服务共享同一进程，如果转录过程中发生底层崩溃（例如显卡驱动异常导致的 CUDA 段错误），会影响到整个后端进程，而不仅仅是转录任务本身。对于本项目单机单用户的使用场景，这个取舍是合理的；如果未来需要多机分布式处理，再引入 Celery/Redis（或云队列服务）会更合适。
 
 ---
 
@@ -113,9 +146,6 @@ cp .env.example .env
 可配置项：
 
 ```env
-# Redis 地址（默认本机，通常无需修改）
-REDIS_URL=redis://localhost:6379/0
-
 # FunASR 全局热词（也可在每次上传时单独填写）
 FUNASR_HOTWORDS=
 ```
@@ -125,17 +155,18 @@ FUNASR_HOTWORDS=
 ## 查看日志
 
 ```bash
-tail -f .logs/backend.log    # FastAPI 后端
-tail -f .logs/worker.log     # Celery 转录任务（含模型输出）
+tail -f .logs/backend.log    # FastAPI 后端 + 转录后台线程（含模型输出）
 tail -f .logs/frontend.log   # Vite 前端
 ```
+
+Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同。每次转录另外还会写入 `data/logs/<meeting_id>.log`（详情页「处理日志」面板读取的就是这个文件）。
 
 ---
 
 ## 常见问题
 
 **Q：上传后一直显示「等待处理」？**
-服务重启后会自动恢复未完成任务。如仍无响应，检查 `.logs/worker.log` 是否有报错。
+服务重启后会自动恢复未完成任务。如仍无响应，检查 `.logs/backend.log` 是否有报错。
 
 **Q：说话人分离效果差，所有人识别成同一个？**
 上传时填写参与者姓名作为热词有助于改善。cam++ 在 3 人以上、说话风格差异明显时效果更好。
@@ -157,7 +188,7 @@ tail -f .logs/frontend.log   # Vite 前端
 │   │   └── jobs.py         # 任务状态查询
 │   ├── main.py             # 上传接口、启动恢复逻辑
 │   ├── pipeline.py         # FunASR 转录流水线
-│   ├── worker.py           # Celery 异步任务
+│   ├── worker.py           # 进程内线程队列，异步执行转录任务
 │   ├── models.py           # SQLAlchemy 数据模型
 │   └── database.py         # 数据库初始化与迁移
 ├── frontend/
@@ -178,8 +209,9 @@ tail -f .logs/frontend.log   # Vite 前端
 │   ├── models/             # FunASR 模型缓存
 │   └── meetings.db         # SQLite 数据库
 ├── pyproject.toml          # Python 依赖（uv 管理）
-├── setup.sh                # 一键安装
-├── start.sh                # 启动所有服务
-├── stop.sh                 # 停止所有服务
-└── download_models.sh      # 下载 FunASR 模型
+├── download_models.py      # 模型下载逻辑（被 .sh / .ps1 共用）
+├── setup.sh / setup.ps1                # 一键安装（Linux/WSL / Windows 原生）
+├── start.sh / start.ps1                # 启动所有服务
+├── stop.sh / stop.ps1                  # 停止所有服务
+└── download_models.sh / download_models.ps1  # 下载 FunASR 模型
 ```

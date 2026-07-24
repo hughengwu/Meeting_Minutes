@@ -8,9 +8,9 @@ echo "=== 会议记录 安装脚本 ==="
 
 # ── 1. 系统依赖 ─────────────────────────────────────────────
 echo ""
-echo "[1/4] 安装系统依赖 (ffmpeg, redis, git)..."
+echo "[1/4] 安装系统依赖 (ffmpeg, git)..."
 sudo apt-get update -qq
-sudo apt-get install -y ffmpeg redis-server curl git build-essential
+sudo apt-get install -y ffmpeg curl git build-essential
 
 # ── 2. 安装 uv ──────────────────────────────────────────────
 echo ""

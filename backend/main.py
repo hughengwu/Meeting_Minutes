@@ -13,7 +13,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 from api import jobs, meetings
 from database import DATA_DIR, SessionLocal, init_db
 from models import Job, Meeting
-from worker import process_audio_task
+from worker import enqueue_task, start_worker
 
 app = FastAPI(title="会议记录")
 
@@ -35,11 +35,12 @@ ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".webm"}
 def startup():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     init_db()
+    start_worker()
     _recover_pending_jobs()
 
 
 def _recover_pending_jobs():
-    """服务重启后，把 Redis 里丢失的 pending/processing job 重新入队。"""
+    """服务重启后，把内存队列里丢失的 pending/processing job 重新入队。"""
     db = SessionLocal()
     try:
         stuck = (
@@ -57,7 +58,7 @@ def _recover_pending_jobs():
             job.error_message = None
             meeting.status = "pending"
             db.commit()
-            process_audio_task.delay(meeting.id, meeting.audio_path, job.id, meeting.hotwords or "")
+            enqueue_task(meeting.id, meeting.audio_path, job.id, meeting.hotwords or "")
             print(f"[startup] re-queued job {job.id} for meeting {meeting.id}")
     finally:
         db.close()
@@ -108,5 +109,5 @@ async def upload_audio(
     finally:
         db.close()
 
-    process_audio_task.delay(meeting_id, file_path, job_id, hotwords.strip())
+    enqueue_task(meeting_id, file_path, job_id, hotwords.strip())
     return {"meeting_id": meeting_id, "job_id": job_id}

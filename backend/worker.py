@@ -1,4 +1,5 @@
-import os
+import queue
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -6,18 +7,46 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from celery import Celery
 from database import DATA_DIR
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
 
 LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# 单进程内的任务队列，替代 Celery + Redis：
+# 本项目单机单 GPU 运行，任务本就串行处理（原 concurrency=1），
+# 用标准库 threading + queue 即可满足需求，且原生 Windows 可直接运行。
+_task_queue: "queue.Queue[tuple[str, str, str, str]]" = queue.Queue()
+_worker_thread: threading.Thread | None = None
+_worker_lock = threading.Lock()
 
-@celery_app.task(name="process_audio")
-def process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
+
+def start_worker():
+    """启动后台工作线程（幂等，重复调用无副作用）。"""
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return
+        _worker_thread = threading.Thread(target=_worker_loop, name="audio-worker", daemon=True)
+        _worker_thread.start()
+
+
+def enqueue_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
+    _task_queue.put((meeting_id, audio_path, job_id, hotwords))
+
+
+def _worker_loop():
+    while True:
+        meeting_id, audio_path, job_id, hotwords = _task_queue.get()
+        try:
+            _process_audio_task(meeting_id, audio_path, job_id, hotwords)
+        except Exception:
+            # 异常已在 _process_audio_task 内记录到数据库/日志文件，这里仅防止工作线程退出
+            pass
+        finally:
+            _task_queue.task_done()
+
+
+def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
     from database import SessionLocal
     from models import Job, Meeting, Utterance
     from pipeline import process_audio
