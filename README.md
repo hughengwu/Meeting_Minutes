@@ -1,6 +1,6 @@
 # 会议记录
 
-本地部署的会议语音转录系统。上传录音文件，自动完成语音识别和说话人分离，生成带时间戳的会议记录，支持音频同步高亮、在线编辑和导出。
+本地部署的会议语音转录系统。上传录音或视频文件，自动完成语音识别和说话人分离，生成带时间戳的会议记录；支持音频同步高亮、在线编辑、中文翻译，以及 SRT / VTT 字幕导出（原文 / 中文 / 双语）。
 
 ## 技术栈
 
@@ -99,7 +99,7 @@
 
 - **FireRedASR-AED**（默认）：中文识别精度更高，从 HuggingFace 下载（约 350MB），显存需求约 8GB
 - **Paraformer-zh**：阿里 FunASR，显存需求约 4GB，即 `download_models.sh`/`download_models.ps1` 下载的模型
-- **SenseVoice 多语言**：支持中/英/日/韩/粤，非中文自动翻译成中文，显存需求约 4GB
+- **SenseVoice 多语言**：支持中/英/日/韩/粤，英文内容用本地模型自动翻译成中文（原文保留），显存需求约 4GB
 
 未下载的模型无法被激活；上传音频时会先检查当前激活模型是否已下载。下载/激活状态保存在 `data/config.json` 和 `data/download_status/`（均为本机运行时数据，不纳入版本控制）。
 
@@ -113,7 +113,18 @@
 
 支持格式：`MP3` `WAV` `M4A` `FLAC` `OGG` `MP4` `MKV` `AVI` `MOV` `WEBM`（视频文件会自动提取音轨）
 
-### 2. 填写会议背景（可选，推荐）
+### 2. 选择处理方式
+
+上传确认框里二选一（视频默认选「视频字幕」，音频默认选「会议记录」）：
+
+| 方式 | 说明 |
+|---|---|
+| **会议记录** | 跑说话人分离（cam++），每段标注 `SPEAKER_00` 等并可重命名为真实姓名 |
+| **视频字幕** | **跳过说话人分离**，只按语音停顿（VAD，单段上限 15 秒）切句。少加载 cam++ 和标点模型，显存和耗时都明显更低 |
+
+两种方式都能导出 SRT / VTT 字幕；字幕模式下页面不显示说话人相关的 UI。
+
+### 3. 填写会议背景（可选，推荐）
 
 确认框中可填写热词，提升识别准确率：
 
@@ -123,11 +134,11 @@
 
 空格或换行分隔均可。
 
-### 3. 等待处理
+### 4. 等待处理
 
 转录在后台进行，页面实时显示进度和日志。GPU 处理速度约为音频时长的 1/5，首次加载模型额外需要 30–60 秒。
 
-### 4. 查看和编辑结果
+### 5. 查看和编辑结果
 
 处理完成后自动跳转会议详情页：
 
@@ -138,12 +149,37 @@
 - **说话人重命名**：点击说话人标签（`SPEAKER_00` 等）修改为真实姓名
 - **编辑文字**：双击任意段落直接编辑识别内容
 
-### 5. 导出
+### 6. 翻译成中文字幕
 
-详情页右上角支持导出为：
-- **Markdown**：带格式的 `.md` 文件
-- **纯文本**：`.txt` 文件
-- **复制到剪贴板**
+上传视频/音频时可勾选「转录完成后自动翻译成中文字幕」，也可以在详情页「转录内容」页顶部点「翻译成中文」随时手动触发。
+
+- 翻译在后台队列串行执行，页面实时显示进度；译文显示在每段原文下方，双击可手动修正
+- **原文不会被覆盖**，译文单独保存，因此翻译前后的字幕都能导出
+- 已经是目标语言的片段自动跳过，不消耗翻译额度；失败的片段可以再点一次按钮补翻
+
+翻译服务在首页右上角「设置 → 字幕翻译」中配置，三选一：
+
+| 服务 | 说明 |
+|---|---|
+| **Google 翻译（免费接口）**（默认） | 无需 API Key，国内网络一般要填 HTTP 代理 |
+| **Google Cloud Translation v2** | 官方接口，需填 API Key，不易被限流 |
+| **LM Studio 本地模型** | 调用本机 LM Studio 的 OpenAI 兼容接口，完全离线；可点「获取列表」选择已加载的模型 |
+
+配置页有「测试连接」按钮，会用当前配置翻一句样例文本并把失败原因原样显示出来。
+
+### 7. 导出字幕与文稿
+
+详情页右上角：
+
+- **字幕 ▾**：导出 `SRT` / `VTT`，各有三种语言版本
+  - **原文字幕**：识别出来的原始语言
+  - **中文字幕**：译文（未翻译的片段回退原文）
+  - **双语字幕**：中文在上、原文在下
+  - 可勾选「字幕中带说话人名字」
+  - 单语字幕会按标点和词边界自动切分过长/过久的片段（英文断在词边界，不切断单词）
+- **Markdown** / **纯文本** / **复制到剪贴板**：有译文时导出双语对照
+
+> 视频文件在提取音轨后原视频不保留，因此字幕以文件形式导出，用播放器（如 PotPlayer / VLC）加载同名 `.srt` 即可。
 
 ---
 
@@ -160,6 +196,14 @@ cp .env.example .env
 ```env
 # FunASR 全局热词（也可在每次上传时单独填写）
 FUNASR_HOTWORDS=
+
+# 字幕翻译默认值（前端「设置 → 字幕翻译」保存的配置优先级更高）
+TRANSLATE_PROVIDER=google_free      # google_free / google_v2 / lmstudio
+TRANSLATE_TARGET_LANG=zh-CN
+TRANSLATE_PROXY=                    # 例：http://127.0.0.1:7890
+GOOGLE_TRANSLATE_API_KEY=           # provider=google_v2 时必填
+LMSTUDIO_BASE_URL=http://localhost:1234/v1
+LMSTUDIO_MODEL=                     # 留空则用 LM Studio 已加载的第一个模型
 ```
 
 ---
@@ -196,12 +240,15 @@ Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同
 ```
 ├── backend/
 │   ├── api/
-│   │   ├── meetings.py     # 会议 CRUD、音频流、导出
+│   │   ├── meetings.py     # 会议 CRUD、音频流、字幕/文稿导出、发起翻译
 │   │   ├── jobs.py         # 任务状态查询
-│   │   └── models.py       # 模型列表/下载/切换接口
+│   │   ├── models.py       # 模型列表/下载/切换接口
+│   │   └── translation.py  # 翻译服务配置、连接测试、LM Studio 模型列表
 │   ├── main.py             # 上传接口、启动恢复逻辑
 │   ├── pipeline.py         # 转录流水线（按激活模型分发）
-│   ├── worker.py           # 进程内线程队列，异步执行转录/下载任务
+│   ├── translator.py       # 翻译后端（Google 在线 / LM Studio 本地）
+│   ├── subtitle.py         # SRT / VTT 生成与字幕切分
+│   ├── worker.py           # 进程内线程队列，异步执行转录/翻译/下载任务
 │   ├── model_manager.py    # 模型注册表、下载状态、激活模型
 │   ├── models.py           # SQLAlchemy 数据模型
 │   └── database.py         # 数据库初始化与迁移
@@ -213,17 +260,18 @@ Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同
 │       │   └── Meeting.jsx # 会议详情 + 播放器
 │       └── components/
 │           ├── AudioPlayer.jsx      # 音频播放器（支持拖动 seek）
-│           ├── TranscriptBlock.jsx  # 单条转录段落
-│           ├── ExportPanel.jsx      # 导出面板
+│           ├── TranscriptBlock.jsx  # 单条转录段落（原文 + 译文）
+│           ├── ExportPanel.jsx      # 字幕 / 文稿导出面板
 │           ├── LogViewer.jsx        # 处理日志查看
 │           ├── ProcessingStatus.jsx # 处理进度显示
-│           └── ModelManager.jsx     # 模型下载/切换面板
+│           ├── TranslationSettings.jsx # 翻译服务配置
+│           └── ModelManager.jsx     # 设置弹窗（ASR 模型 + 字幕翻译两个页签）
 ├── data/                   # 运行时数据（gitignore）
 │   ├── uploads/            # 上传的音频文件
 │   ├── logs/               # 每次转录的处理日志
 │   ├── models/             # ASR 模型缓存
 │   ├── download_status/    # 各模型下载进度
-│   ├── config.json         # 当前激活模型
+│   ├── config.json         # 当前激活模型 + 翻译服务配置
 │   └── meetings.db         # SQLite 数据库
 ├── pyproject.toml          # Python 依赖（uv 管理）
 ├── download_models.py      # 模型下载逻辑（被 .sh / .ps1 共用）

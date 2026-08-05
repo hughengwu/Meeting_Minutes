@@ -33,6 +33,8 @@ function MeetingCard({ meeting: m, onDelete }) {
   const isActive = m.status === 'pending' || m.status === 'processing'
   const progress = m.job?.progress || 0
   const stepLabel = m.job?.error_message || ''
+  const isTranslating =
+    m.translate_job?.status === 'pending' || m.translate_job?.status === 'processing'
 
   return (
     <div
@@ -43,6 +45,11 @@ function MeetingCard({ meeting: m, onDelete }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
             <span className="font-medium text-gray-900 truncate text-sm">{m.title}</span>
+            {m.mode === 'subtitle' && (
+              <span className="flex-shrink-0 text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium">
+                字幕
+              </span>
+            )}
           </div>
 
           {m.status === 'done' && (
@@ -50,6 +57,11 @@ function MeetingCard({ meeting: m, onDelete }) {
               {formatDate(m.created_at)}
               {m.speaker_count > 0 && <span> · {m.speaker_count} 位说话人</span>}
               {m.utterance_count > 0 && <span> · {m.utterance_count} 条发言</span>}
+              {isTranslating ? (
+                <span className="text-blue-500"> · 字幕翻译中 {m.translate_job?.progress || 0}%</span>
+              ) : m.translated_count > 0 ? (
+                <span className="text-emerald-600"> · 已翻译</span>
+              ) : null}
             </p>
           )}
           {m.status === 'error' && (
@@ -110,17 +122,56 @@ function isVideo(filename) {
   return VIDEO_EXTS.has(ext)
 }
 
+const MODES = [
+  {
+    key: 'meeting',
+    label: '会议记录',
+    hint: '区分说话人，可重命名为真实姓名',
+  },
+  {
+    key: 'subtitle',
+    label: '视频字幕',
+    hint: '跳过说话人分离，按语音停顿切句，更快',
+  },
+]
+
 function UploadModal({ file, onConfirm, onCancel }) {
   const [hotwords, setHotwords] = useState('')
+  const [autoTranslate, setAutoTranslate] = useState(false)
   const video = isVideo(file.name)
+  // 视频多半是拿来做字幕的，默认选字幕模式；音频默认会议模式
+  const [mode, setMode] = useState(video ? 'subtitle' : 'meeting')
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-1">上传{video ? '视频' : '音频'}</h2>
-        <p className="text-sm text-gray-400 mb-1 truncate">{file.name}</p>
-        {video && (
-          <p className="text-xs text-blue-500 mb-3">视频将自动提取音轨；若使用「SenseVoice 多语言」模型，非中文内容会自动翻译为中文。</p>
-        )}
+        <p className="text-sm text-gray-400 mb-3 truncate">{file.name}</p>
+
+        <label className="block text-sm font-medium text-gray-700 mb-1.5">处理方式</label>
+        <div className="grid grid-cols-2 gap-2 mb-1.5">
+          {MODES.map((m) => (
+            <button
+              key={m.key}
+              onClick={() => setMode(m.key)}
+              className={`text-left border rounded-xl px-3 py-2 transition-colors ${
+                mode === m.key
+                  ? 'border-blue-400 bg-blue-50/60'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <p className={`text-sm font-medium ${mode === m.key ? 'text-blue-700' : 'text-gray-700'}`}>
+                {m.label}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5 leading-snug">{m.hint}</p>
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-400 mb-4">
+          {video
+            ? '视频会自动提取音轨用于识别（原视频不保留），完成后可导出 SRT / VTT 字幕。'
+            : '两种方式都能导出 SRT / VTT 字幕。'}
+        </p>
 
         <label className="block text-sm font-medium text-gray-700 mb-1.5">
           会议背景 / 热词
@@ -133,9 +184,24 @@ function UploadModal({ file, onConfirm, onCancel }) {
           className="w-full h-28 text-sm border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 placeholder-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           autoFocus
         />
-        <p className="text-xs text-gray-400 mt-1.5 mb-5">
+        <p className="text-xs text-gray-400 mt-1.5 mb-4">
           热词会引导模型优先识别这些词汇；背景描述帮助理解语境，两者均可混写。
         </p>
+
+        <label className="flex items-start gap-2 mb-5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoTranslate}
+            onChange={(e) => setAutoTranslate(e.target.checked)}
+            className="w-4 h-4 mt-0.5 accent-blue-600 flex-shrink-0"
+          />
+          <span className="text-sm text-gray-700">
+            转录完成后自动翻译成中文字幕
+            <span className="block text-xs text-gray-400 mt-0.5">
+              使用设置里配置的翻译服务（默认 Google 在线翻译）；也可以稍后在会议页手动翻译。
+            </span>
+          </span>
+        </label>
 
         <div className="flex gap-2 justify-end">
           <button
@@ -145,7 +211,7 @@ function UploadModal({ file, onConfirm, onCancel }) {
             取消
           </button>
           <button
-            onClick={() => onConfirm(hotwords)}
+            onClick={() => onConfirm(hotwords, autoTranslate, mode)}
             className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
           >
             开始处理
@@ -181,14 +247,14 @@ export default function Home() {
     setPendingFile(file)
   }
 
-  const handleConfirm = async (hotwords) => {
+  const handleConfirm = async (hotwords, autoTranslate, mode) => {
     const file = pendingFile
     setPendingFile(null)
     setUploadError('')
     setUploading(true)
     setUploadProgress(0)
     try {
-      const res = await uploadAudio(file, hotwords, setUploadProgress)
+      const res = await uploadAudio(file, hotwords, setUploadProgress, autoTranslate, mode)
       navigate(`/meeting/${res.data.meeting_id}`, { state: { jobId: res.data.job_id } })
     } catch (e) {
       setUploadError(e.response?.data?.detail || '上传失败，请重试')

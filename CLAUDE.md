@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-本地部署的会议录音转文字 Web 应用，运行在 Windows 原生 或 WSL2/Linux + NVIDIA GPU 上。核心能力：中文/多语言语音转文字、说话人分离、音频回放同步高亮、热词提示、多 ASR 模型可切换。
+本地部署的会议录音转文字 Web 应用，运行在 Windows 原生 或 WSL2/Linux + NVIDIA GPU 上。核心能力：中文/多语言语音转文字、说话人分离、音频回放同步高亮、热词提示、多 ASR 模型可切换、字幕翻译成中文、SRT/VTT 字幕导出（原文/中文/双语）。
 
 ## 启动与开发
 
@@ -55,6 +55,7 @@ Windows 下用 `Get-Content -Wait -Tail 50 .logs\backend.log`。每次转录另�
 | 层 | 技术 |
 |---|---|
 | ASR + 说话人分离 | **FunASR**（paraformer-zh / SenseVoice + fsmn-vad + ct-punc + cam++）、**FireRedASR-AED**（默认，CER 更低） |
+| 字幕翻译 | Google 免费接口 / Google Cloud Translation v2 / LM Studio 本地模型（OpenAI 兼容），仅用标准库 urllib 调用，无额外依赖 |
 | 任务队列 | 进程内线程队列（标准库 `threading` + `queue`），单机单 GPU 场景无需 Celery/Redis |
 | 后端 | FastAPI + SQLite |
 | 前端 | React + Vite + Tailwind CSS |
@@ -87,7 +88,26 @@ worker 线程（GPU）：
 每阶段进度 → data/logs/{meeting_id}.log
 ```
 
-热词（`hotword` 参数）用于提升专有名词识别率（仅 FunASR 系列模型支持）。模型下载任务（`enqueue_model_download()`）与转录任务共用同一个后台线程队列，串行处理。
+热词（`hotword` 参数）用于提升专有名词识别率（仅 FunASR 系列模型支持）。模型下载任务（`enqueue_model_download()`）、字幕翻译任务（`enqueue_translate()`）与转录任务共用同一个后台线程队列，串行处理。
+
+### 两种处理模式
+
+`meetings.mode` 决定 `pipeline.process_audio(..., diarize=)`：
+
+- `meeting`（默认）：原有流程，跑 cam++ 做说话人分离，`sentence_info` 给出句子边界
+- `subtitle`（字幕模式）：`_process_subtitle()`，只用 fsmn-vad 切句（`max_single_segment_time=15s`）后逐段识别，**不加载 cam++**；FireRedASR 路径下还省掉了原本仅为拿句子边界而跑的整段 Paraformer。`speaker` 存 NULL，前端相应隐藏说话人 UI；VAD 段就是天然字幕边界，因此**不做 `_merge_segments`**（合并会拼出横跨几十秒的长字幕）
+
+显存注意：`punc_ct-transformer_cn-en-common-vocab471067-large`（ct-punc）词表 47 万，embedding + 输出层就要 1.5GB 以上，是流水线里最大的一块。字幕模式下 SenseVoice 开 `use_itn` 自带标点，故不挂 ct-punc；paraformer 原始输出无标点才需要。字幕模式 `batch_size_s` 用 60（会议模式是 300），降低激活值峰值。
+
+### 字幕翻译
+
+`backend/translator.py` 提供三个后端（`PROVIDERS`）：`google_free`（默认，免 Key，国内需代理）、`google_v2`（官方接口 + API Key）、`lmstudio`（本机 OpenAI 兼容接口）。全部用标准库 `urllib` 请求，不引入新依赖；访问 localhost 的 LM Studio 时强制绕过代理。配置写在 `data/config.json` 的 `translation` 键下（与 `active_model` 同文件，双方都是「读整个 dict → 改自己那部分 → 写回」），`.env` 里的同名变量作为默认值。
+
+翻译**不覆盖识别原文**：原文在 `utterances.text`，译文在 `utterances.text_zh`，因此翻译前后的字幕都能导出。已是目标语言的片段（`_needs_translation()` 判断）直接沿用原文，不发请求。`_translate_task()` 默认只补翻 `text_zh` 为空的片段，`force=True` 时全部重译。
+
+SenseVoice 流水线里的本地 opus-mt 翻译同样写入 `text_zh`（历史上它会覆盖 `text`，已改）。
+
+`backend/subtitle.py` 负责 SRT/VTT 生成：`build_cues()` 按显示宽度（CJK 记 2）和时长约束切分过长片段，英文断在词边界；双语字幕不切分（两种语言切分后容易错位）。
 
 ### 数据流
 
@@ -99,7 +119,9 @@ worker 线程（GPU）：
 
 ### 数据库 Schema
 
-`Meeting` 表有 `hotwords` 列（后加），`database.py` 的 `init_db()` 用 `ALTER TABLE` 做迁移兼容，无需手动跑迁移脚本。
+后加的列都在 `database.py` 的 `init_db()` 里用 `ALTER TABLE` 做迁移兼容（`migrations` 列表，逐表检查列是否存在），无需手动跑迁移脚本：`meetings.hotwords`、`meetings.auto_translate`、`utterances.text_zh`、`jobs.kind`。
+
+`jobs.kind` 区分 `transcribe` / `translate`，历史行由 SQLite 的 `ADD COLUMN ... DEFAULT 'transcribe'` 自动回填；查询转录任务时仍用 `or_(Job.kind == "transcribe", Job.kind.is_(None))` 兜底。`main.py::_recover_pending_jobs()` 按 `kind` 分派重新入队。
 
 ### 音频回放与字幕同步
 
@@ -126,12 +148,15 @@ HF_ENDPOINT=https://hf-mirror.com   # 国内下载模型可换镜像
 
 所有请求通过 `frontend/src/api/index.js` 发出，base URL 为 `/api`（Vite dev 模式代理到 `localhost:8000`）。关键接口：
 
-- `POST /api/upload` — 接收 `file`（multipart）和 `hotwords`（form field）
+- `POST /api/upload` — 接收 `file`（multipart）、`hotwords`、`translate`（form field，`"1"` 表示转录后自动翻译）
 - `GET /api/meetings/{id}/audio` — 支持 Range 请求的音频流
 - `GET /api/meetings/{id}/logs` — 返回 `{ lines: string[] }`，前端每 2 秒轮询
 - `GET /api/jobs/{id}` — 返回 `{ status, progress, error_message }`
 - `GET /api/models/` — 模型列表及下载/激活状态
 - `POST /api/models/{id}/download` — 触发模型下载（异步，进度轮询 `GET /api/models/{id}/status`）
 - `POST /api/models/active` — 切换激活模型（需已下载）
+- `POST /api/meetings/{id}/translate` — 发起字幕翻译（body `{force}`），进度看会议详情里的 `translate_job`
+- `GET /api/meetings/{id}/export?format=srt|vtt|markdown|text&lang=original|zh|bilingual&speaker=0|1` — 返回 `{ content, title, filename }`
+- `GET|POST /api/translation/settings`、`POST /api/translation/test`、`GET /api/translation/lmstudio/models` — 翻译服务配置与自检
 
 `error_message` 字段在处理中被复用为当前阶段描述文字（非错误时），`ProcessingStatus` 组件直接展示该字段。

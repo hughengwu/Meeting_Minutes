@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { downloadModel, getModels, setActiveModel } from '../api'
+import TranslationSettings from './TranslationSettings'
 
 function CheckIcon() {
   return (
@@ -97,6 +98,7 @@ function ModelCard({ model, onDownload, onActivate }) {
 
 export default function ModelManager({ onClose }) {
   const [models, setModels] = useState([])
+  const [tab, setTab] = useState('asr')
 
   const load = useCallback(() => {
     getModels().then(r => setModels(r.data)).catch(() => {})
@@ -106,12 +108,13 @@ export default function ModelManager({ onClose }) {
     load()
   }, [load])
 
-  // 下载中时每 2 秒轮询，否则每 5 秒
+  // 下载中时每 2 秒轮询，否则每 5 秒；切到翻译设置页就不用轮询了
   useEffect(() => {
+    if (tab !== 'asr') return
     const hasDownloading = models.some(m => m.download_status?.status === 'downloading')
     const t = setInterval(load, hasDownloading ? 2000 : 5000)
     return () => clearInterval(t)
-  }, [models, load])
+  }, [models, load, tab])
 
   const handleDownload = async (modelId) => {
     await downloadModel(modelId).catch(() => {})
@@ -129,11 +132,11 @@ export default function ModelManager({ onClose }) {
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6"
+        className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-semibold text-gray-900">ASR 模型设置</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900">设置</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 text-xl leading-none w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
@@ -142,23 +145,48 @@ export default function ModelManager({ onClose }) {
           </button>
         </div>
 
-        <div className="space-y-3">
-          {models.map(m => (
-            <ModelCard
-              key={m.id}
-              model={m}
-              onDownload={handleDownload}
-              onActivate={handleActivate}
-            />
+        <div className="flex gap-0 mb-5 border-b border-gray-200">
+          {[
+            { key: 'asr', label: 'ASR 模型' },
+            { key: 'translation', label: '字幕翻译' },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                tab === t.key
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
           ))}
-          {models.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-4">加载中...</p>
-          )}
         </div>
 
-        <p className="text-xs text-gray-400 mt-4 leading-relaxed">
-          切换模型后新任务使用新模型处理，已有转录不受影响。FireRedASR 模式下热词对文本输出暂无效果。
-        </p>
+        {tab === 'asr' ? (
+          <>
+            <div className="space-y-3">
+              {models.map(m => (
+                <ModelCard
+                  key={m.id}
+                  model={m}
+                  onDownload={handleDownload}
+                  onActivate={handleActivate}
+                />
+              ))}
+              {models.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-4">加载中...</p>
+              )}
+            </div>
+
+            <p className="text-xs text-gray-400 mt-4 leading-relaxed">
+              切换模型后新任务使用新模型处理，已有转录不受影响。FireRedASR 模式下热词对文本输出暂无效果。
+            </p>
+          </>
+        ) : (
+          <TranslationSettings />
+        )}
       </div>
     </div>
   )

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  deleteMeeting, getMeeting, getJob,
+  deleteMeeting, getMeeting, getJob, translateMeeting,
   updateSpeakerNames, updateTitle, updateUtterance,
 } from '../api'
 import AudioPlayer from '../components/AudioPlayer'
@@ -27,6 +27,9 @@ export default function Meeting() {
 
   const [meeting, setMeeting] = useState(null)
   const [job, setJob] = useState(null)
+  const [translateJob, setTranslateJob] = useState(null)
+  const [translateError, setTranslateError] = useState('')
+  const [showTranslation, setShowTranslation] = useState(true)
   const [activeTab, setActiveTab] = useState('transcript')
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -75,9 +78,20 @@ export default function Meeting() {
     getMeeting(id).then((r) => {
       setMeeting(r.data)
       if (r.data.job) setJob(r.data.job)
+      setTranslateJob(r.data.translate_job || null)
     }).catch(() => {}), [id])
 
   useEffect(() => { loadMeeting() }, [loadMeeting])
+
+  // 翻译任务在后台队列里跑，进行中时持续轮询会议详情拿进度和译文
+  const translating =
+    translateJob?.status === 'pending' || translateJob?.status === 'processing'
+
+  useEffect(() => {
+    if (!translating) return
+    const t = setInterval(loadMeeting, 2000)
+    return () => clearInterval(t)
+  }, [translating, loadMeeting])
 
   useEffect(() => {
     if (!meeting) return
@@ -102,7 +116,7 @@ export default function Meeting() {
   const speakerIndex = {}
   let colorIdx = 0
   for (const u of meeting?.utterances || []) {
-    if (!(u.speaker in speakerIndex)) speakerIndex[u.speaker] = colorIdx++
+    if (u.speaker && !(u.speaker in speakerIndex)) speakerIndex[u.speaker] = colorIdx++
   }
   const getSpeakerName = (sid) => meeting?.speaker_names?.[sid] || sid
   const getColor = (sid) => SPEAKER_COLORS[speakerIndex[sid] % SPEAKER_COLORS.length]
@@ -129,12 +143,23 @@ export default function Meeting() {
     await updateSpeakerNames(id, next)
   }
 
-  const saveUtterance = async (utteranceId, text) => {
+  const saveUtterance = async (utteranceId, patch) => {
     setMeeting((m) => ({
       ...m,
-      utterances: m.utterances.map((u) => u.id === utteranceId ? { ...u, text } : u),
+      utterances: m.utterances.map((u) => u.id === utteranceId ? { ...u, ...patch } : u),
     }))
-    await updateUtterance(id, utteranceId, text)
+    await updateUtterance(id, utteranceId, patch)
+  }
+
+  const startTranslate = async (force = false) => {
+    setTranslateError('')
+    try {
+      await translateMeeting(id, force)
+      setTranslateJob({ status: 'pending', progress: 0, error_message: null })
+      loadMeeting()
+    } catch (e) {
+      setTranslateError(e.response?.data?.detail || '发起翻译失败')
+    }
   }
 
   const handleDelete = async () => {
@@ -153,10 +178,17 @@ export default function Meeting() {
 
   const isProcessing = meeting.status === 'pending' || meeting.status === 'processing'
   const isDone = meeting.status === 'done'
-  const uniqueSpeakers = [...new Set((meeting.utterances || []).map((u) => u.speaker))]
+  // 字幕模式没有说话人信息（speaker 为 null），相关 UI 整体隐藏
+  const isSubtitleMode = meeting.mode === 'subtitle'
+  const uniqueSpeakers = [
+    ...new Set((meeting.utterances || []).map((u) => u.speaker).filter(Boolean)),
+  ]
+  const total = (meeting.utterances || []).length
+  const translatedCount = meeting.translated_count || 0
+  const hasTranslation = translatedCount > 0
 
   const tabs = [
-    { key: 'transcript', label: '转录内容', disabled: !isDone },
+    { key: 'transcript', label: isSubtitleMode ? '字幕内容' : '转录内容', disabled: !isDone },
     { key: 'logs',       label: '处理日志' },
   ]
 
@@ -193,7 +225,13 @@ export default function Meeting() {
             )}
           </div>
 
-          {isDone && <ExportPanel meetingId={id} />}
+          {isDone && (
+            <ExportPanel
+              meetingId={id}
+              hasTranslation={hasTranslation}
+              hasSpeakers={uniqueSpeakers.length > 0}
+            />
+          )}
           <button
             onClick={handleDelete}
             className="text-xs text-gray-300 hover:text-red-500 transition-colors flex-shrink-0 ml-1"
@@ -239,6 +277,69 @@ export default function Meeting() {
         {/* Transcript tab */}
         {activeTab === 'transcript' && isDone && (
           <>
+            {/* 字幕翻译 */}
+            <div className="mb-3 px-3 py-2.5 bg-white rounded-xl border border-gray-200">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-gray-400">字幕翻译：</span>
+
+                {translating ? (
+                  <>
+                    <span className="flex items-center gap-1.5 text-xs text-blue-600">
+                      <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+                      {translateJob?.error_message || '翻译中...'}
+                    </span>
+                    <div className="flex-1 min-w-[120px] bg-gray-100 rounded-full h-1.5">
+                      <div
+                        className="bg-blue-500 h-1.5 rounded-full transition-all duration-700"
+                        style={{ width: `${translateJob?.progress || 0}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-gray-400">{translateJob?.progress || 0}%</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs text-gray-600">
+                      {hasTranslation ? `已翻译 ${translatedCount}/${total} 条` : '尚未翻译'}
+                    </span>
+                    <button
+                      onClick={() => startTranslate(false)}
+                      className="px-3 py-1 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                    >
+                      {hasTranslation
+                        ? (translatedCount < total ? '继续翻译剩余部分' : '补翻新增片段')
+                        : '翻译成中文'}
+                    </button>
+                    {hasTranslation && (
+                      <button
+                        onClick={() => startTranslate(true)}
+                        className="px-3 py-1 text-xs font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        全部重译
+                      </button>
+                    )}
+                    {hasTranslation && (
+                      <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer ml-auto">
+                        <input
+                          type="checkbox"
+                          checked={showTranslation}
+                          onChange={(e) => setShowTranslation(e.target.checked)}
+                          className="w-3.5 h-3.5 accent-blue-600"
+                        />
+                        显示译文
+                      </label>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {(translateError || translateJob?.status === 'error') && (
+                <p className="text-xs text-red-500 mt-2 break-all">
+                  {translateError || `翻译失败：${translateJob?.error_message || '未知错误'}`}
+                  <span className="text-gray-400 ml-1">（可在首页右上角设置里检查翻译服务配置）</span>
+                </p>
+              )}
+            </div>
+
             {uniqueSpeakers.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 mb-5 px-3 py-2.5 bg-white rounded-xl border border-gray-200">
                 <span className="text-xs text-gray-400">说话人：</span>
@@ -269,12 +370,13 @@ export default function Meeting() {
                     else delete blockRefs.current[u.id]
                   }}
                   utterance={u}
-                  speakerName={getSpeakerName(u.speaker)}
-                  color={getColor(u.speaker)}
-                  onSpeakerClick={() => openRename(u.speaker)}
+                  speakerName={u.speaker ? getSpeakerName(u.speaker) : ''}
+                  color={u.speaker ? getColor(u.speaker) : null}
+                  onSpeakerClick={() => u.speaker && openRename(u.speaker)}
                   onTextSave={saveUtterance}
                   isActive={u.id === activeId}
                   onSeek={seekTo}
+                  showTranslation={showTranslation}
                 />
               ))}
             </div>

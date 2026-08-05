@@ -18,13 +18,21 @@ Base = declarative_base()
 def init_db():
     import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
-    # 兼容旧数据库：按需添加新列
+    # 兼容旧数据库：按需添加新列（SQLite 的 ADD COLUMN ... DEFAULT 会自动回填已有行）
     from sqlalchemy import inspect, text
     inspector = inspect(engine)
-    existing = {c["name"] for c in inspector.get_columns("meetings")}
+    migrations = [
+        ("meetings",   "hotwords",       "ALTER TABLE meetings ADD COLUMN hotwords TEXT"),
+        ("meetings",   "auto_translate", "ALTER TABLE meetings ADD COLUMN auto_translate INTEGER DEFAULT 0"),
+        ("meetings",   "mode",           "ALTER TABLE meetings ADD COLUMN mode TEXT DEFAULT 'meeting'"),
+        ("utterances", "text_zh",        "ALTER TABLE utterances ADD COLUMN text_zh TEXT"),
+        ("jobs",       "kind",           "ALTER TABLE jobs ADD COLUMN kind TEXT DEFAULT 'transcribe'"),
+    ]
     with engine.begin() as conn:
-        if "hotwords" not in existing:
-            conn.execute(text("ALTER TABLE meetings ADD COLUMN hotwords TEXT"))
+        for table, column, ddl in migrations:
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing:
+                conn.execute(text(ddl))
 
 
 def get_db():

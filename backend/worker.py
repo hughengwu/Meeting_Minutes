@@ -3,6 +3,7 @@ import queue
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -80,12 +81,17 @@ def start_worker():
         _worker_thread.start()
 
 
-def enqueue_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
-    _task_queue.put(("process_audio", (meeting_id, audio_path, job_id, hotwords)))
+def enqueue_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = "",
+                 mode: str = "meeting"):
+    _task_queue.put(("process_audio", (meeting_id, audio_path, job_id, hotwords, mode)))
 
 
 def enqueue_model_download(model_id: str):
     _task_queue.put(("download_model", (model_id,)))
+
+
+def enqueue_translate(meeting_id: str, job_id: str, force: bool = False):
+    _task_queue.put(("translate_meeting", (meeting_id, job_id, force)))
 
 
 def _worker_loop():
@@ -96,6 +102,8 @@ def _worker_loop():
                 _process_audio_task(*args)
             elif kind == "download_model":
                 _download_model_task(*args)
+            elif kind == "translate_meeting":
+                _translate_task(*args)
         except Exception:
             # 异常已在具体任务函数内记录到数据库/日志文件，这里仅防止工作线程退出
             pass
@@ -103,7 +111,8 @@ def _worker_loop():
             _task_queue.task_done()
 
 
-def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = ""):
+def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords: str = "",
+                        mode: str = "meeting"):
     from database import SessionLocal
     from models import Job, Meeting, Utterance
     from pipeline import process_audio
@@ -170,18 +179,31 @@ def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords:
             hotwords=hotwords,
             on_progress=set_progress,
             log_func=write_log,
+            diarize=(mode != "subtitle"),
         )
 
         set_progress(85, "保存结果...")
         for i, seg in enumerate(segments):
             db.add(Utterance(
                 meeting_id=meeting_id,
-                speaker=seg.get("speaker", "SPEAKER_00"),
+                speaker=seg.get("speaker", "SPEAKER_00"),   # 字幕模式为 None
                 start=seg["start"],
                 end=seg["end"],
                 text=seg["text"].strip(),
+                text_zh=(seg.get("text_zh") or "").strip() or None,
                 order_index=i,
             ))
+
+        # 勾选了「自动翻译」时，转录一结束就排队翻译（同一个后台队列，串行执行）。
+        # 翻译任务行和转录完成状态放在同一次 commit 里落库，否则前端可能刚好轮询到
+        # 「转录已完成、翻译任务还没建」的空档，从而不会启动翻译进度轮询。
+        translate_job = None
+        if meeting.auto_translate:
+            translate_job = Job(
+                id=str(uuid.uuid4()), meeting_id=meeting_id,
+                kind="translate", status="pending", progress=0,
+            )
+            db.add(translate_job)
 
         meeting.status = "done"
         job.status = "done"
@@ -189,6 +211,10 @@ def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords:
         job.error_message = None
         db.commit()
         write_log(f"[{datetime.now().strftime('%H:%M:%S')}] 任务完成")
+
+        if translate_job:
+            enqueue_translate(meeting_id, translate_job.id)
+            write_log(f"[{datetime.now().strftime('%H:%M:%S')}] 已排队：翻译字幕为中文")
 
     except Exception as exc:
         db.rollback()
@@ -202,6 +228,109 @@ def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords:
         if meeting:
             meeting.status = "error"
         db.commit()
+        raise
+    finally:
+        db.close()
+
+
+# ── 字幕翻译任务 ──────────────────────────────────────────────────────────────
+
+def _translate_task(meeting_id: str, job_id: str, force: bool = False):
+    """把某次会议的所有片段翻译成目标语言（默认中文），写入 utterances.text_zh。
+
+    force=False 时只补翻还没有译文的片段——上次失败/新增的片段可以直接重跑，
+    已翻译的部分不会重复消耗在线翻译额度。
+    """
+    from database import SessionLocal
+    from models import Job, Meeting, Utterance
+    from translator import get_settings, translate_texts
+
+    log_path = LOG_DIR / f"{meeting_id}.log"
+    db = SessionLocal()
+
+    def write_log(msg: str):
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+        except Exception:
+            pass
+
+    def set_progress(pct: int, label: str):
+        try:
+            j = db.query(Job).filter(Job.id == job_id).first()
+            if j:
+                j.progress = pct
+                j.error_message = label
+                db.commit()
+        except Exception:
+            pass
+
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not job or not meeting:
+            return
+
+        job.status = "processing"
+        job.progress = 3
+        job.error_message = "准备翻译..."
+        db.commit()
+
+        utterances = (
+            db.query(Utterance)
+            .filter(Utterance.meeting_id == meeting_id)
+            .order_by(Utterance.order_index)
+            .all()
+        )
+        pending = [
+            u for u in utterances
+            if (u.text or "").strip() and (force or not (u.text_zh or "").strip())
+        ]
+        write_log(f"开始翻译字幕：{len(pending)}/{len(utterances)} 条待处理"
+                  f"{'（强制重译）' if force else ''}")
+
+        if not pending:
+            job.status = "done"
+            job.progress = 100
+            job.error_message = None
+            db.commit()
+            write_log("没有需要翻译的片段")
+            return
+
+        settings = get_settings()
+
+        def on_progress(done: int, total: int):
+            set_progress(3 + int(92 * done / max(total, 1)), f"翻译中 {done}/{total}")
+
+        results = translate_texts(
+            [u.text for u in pending],
+            settings=settings,
+            on_progress=on_progress,
+            log=write_log,
+        )
+
+        ok = 0
+        for u, zh in zip(pending, results):
+            if zh and zh.strip():
+                u.text_zh = zh.strip()
+                ok += 1
+        db.commit()
+
+        job.status = "done"
+        job.progress = 100
+        job.error_message = None
+        db.commit()
+        write_log(f"翻译完成：成功 {ok}/{len(pending)} 条")
+
+    except Exception as exc:
+        db.rollback()
+        err = str(exc)
+        write_log(f"[错误] 翻译失败: {err}")
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "error"
+            job.error_message = err
+            db.commit()
         raise
     finally:
         db.close()
