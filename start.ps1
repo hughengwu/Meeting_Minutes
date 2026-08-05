@@ -1,7 +1,6 @@
-# 会议记录 - 启动所有服务（Windows 原生）
-# 与 start.sh 不同：本脚本以后台进程方式启动服务后立即返回，
-# 不会阻塞当前终端（PowerShell 对 Ctrl+C/信号的处理和 bash 不同，
-# 用 stop.ps1 显式停止更可靠）。
+# 会议记录 - 启动所有服务（Windows）
+# 本脚本以后台进程方式启动服务后立即返回，不会阻塞当前终端；
+# 停止服务请用 stop.ps1（PowerShell 对 Ctrl+C/信号的处理不可靠）。
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path

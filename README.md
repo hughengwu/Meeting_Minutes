@@ -11,13 +11,13 @@
 | 任务队列 | 进程内线程队列（标准库 threading + queue，单机单 GPU 场景无需 Celery/Redis） |
 | 后端 | FastAPI + SQLite |
 | 前端 | React + Tailwind CSS + Vite |
-| 运行环境 | Windows 原生 或 WSL2 / Linux + NVIDIA CUDA |
+| 运行环境 | Windows 10/11 原生 + NVIDIA CUDA |
 
 ---
 
 ## 环境要求
 
-- Windows 10/11（原生 PowerShell 即可，也可用 WSL2/Linux）
+- Windows 10/11（原生 PowerShell；本项目只支持 Windows，不再提供 Linux/WSL 脚本）
 - NVIDIA GPU，显存 ≥ 6 GB（推荐 8 GB+）
 - CUDA 12.1 驱动
 - 磁盘空间：模型约 1.6 GB，Python 依赖约 4 GB
@@ -25,8 +25,6 @@
 ---
 
 ## 首次安装
-
-### 方式一：Windows 原生（PowerShell）
 
 ```powershell
 # 若提示脚本被禁止运行，先执行一次：
@@ -39,18 +37,8 @@
 .\download_models.ps1
 ```
 
-### 方式二：WSL2（Ubuntu）/ Linux
-
-```bash
-# 1. 安装系统依赖、Python 3.12 环境、前端依赖
-./setup.sh
-
-# 2. 下载 FunASR 模型（约 1.6 GB，仅需一次）
-./download_models.sh
-```
-
-`setup.ps1` / `setup.sh` 自动完成：
-- 安装 ffmpeg、git 等系统依赖（Windows 下通过 winget，Linux 下通过 apt）
+`setup.ps1` 自动完成：
+- 通过 winget 安装 ffmpeg、git 等系统依赖
 - 安装 [uv](https://github.com/astral-sh/uv) 并创建 Python 3.12 虚拟环境（`.venv`）
 - 安装所有 Python 依赖（含 PyTorch CUDA 12.1）
 - 安装前端 Node.js 依赖
@@ -61,27 +49,17 @@
 
 ## 启动 / 停止 / 重启
 
-**Windows 原生：**
-
 ```powershell
 .\start.ps1                  # 启动所有服务（后台进程，立即返回）
 .\stop.ps1                   # 停止所有服务
 .\stop.ps1; .\start.ps1      # 重启
 ```
 
-**WSL2 / Linux：**
-
-```bash
-./start.sh                  # 启动所有服务
-./stop.sh                   # 停止所有服务
-./stop.sh && ./start.sh     # 重启
-```
-
 启动后访问：
 - **前端**：http://localhost:5173
 - **后端 API**：http://localhost:8000/docs
 
-`start.sh` 会阻塞终端（Ctrl+C 或另开终端执行 `./stop.sh` 来停止）；`start.ps1` 则以后台进程启动后立即返回终端，用 `.\stop.ps1` 停止。两者日志都写入 `.logs/` 目录。
+`start.ps1` 以后台进程启动服务后立即返回终端，用 `.\stop.ps1` 停止；日志写入 `.logs/` 目录。
 
 ---
 
@@ -98,7 +76,7 @@
 首页「模型管理」面板可以下载/切换语音识别模型：
 
 - **FireRedASR-AED**（默认）：中文识别精度更高，从 HuggingFace 下载（约 350MB），显存需求约 8GB
-- **Paraformer-zh**：阿里 FunASR，显存需求约 4GB，即 `download_models.sh`/`download_models.ps1` 下载的模型
+- **Paraformer-zh**：阿里 FunASR，显存需求约 4GB，即 `download_models.ps1` 下载的模型
 - **SenseVoice 多语言**：支持中/英/日/韩/粤，英文内容用本地模型自动翻译成中文（原文保留），显存需求约 4GB
 
 未下载的模型无法被激活；上传音频时会先检查当前激活模型是否已下载。下载/激活状态保存在 `data/config.json` 和 `data/download_status/`（均为本机运行时数据，不纳入版本控制）。
@@ -187,8 +165,8 @@
 
 复制 `.env.example` 为 `.env`：
 
-```bash
-cp .env.example .env
+```powershell
+Copy-Item .env.example .env
 ```
 
 可配置项：
@@ -210,12 +188,12 @@ LMSTUDIO_MODEL=                     # 留空则用 LM Studio 已加载的第一�
 
 ## 查看日志
 
-```bash
-tail -f .logs/backend.log    # FastAPI 后端 + 转录后台线程（含模型输出）
-tail -f .logs/frontend.log   # Vite 前端
+```powershell
+Get-Content -Wait -Tail 50 .logs\backend.log    # FastAPI 后端 + 转录后台线程（含模型输出）
+Get-Content -Wait -Tail 50 .logs\frontend.log   # Vite 前端
 ```
 
-Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同。每次转录另外还会写入 `data/logs/<meeting_id>.log`（详情页「处理日志」面板读取的就是这个文件）。
+每次转录另外还会写入 `data/logs/<meeting_id>.log`（详情页「处理日志」面板读取的就是这个文件）。
 
 ---
 
@@ -274,9 +252,10 @@ Windows 原生下用 `Get-Content -Wait -Tail 50 .logs\backend.log` 效果相同
 │   ├── config.json         # 当前激活模型 + 翻译服务配置
 │   └── meetings.db         # SQLite 数据库
 ├── pyproject.toml          # Python 依赖（uv 管理）
-├── download_models.py      # 模型下载逻辑（被 .sh / .ps1 共用）
-├── setup.sh / setup.ps1                # 一键安装（Linux/WSL / Windows 原生）
-├── start.sh / start.ps1                # 启动所有服务
-├── stop.sh / stop.ps1                  # 停止所有服务
-└── download_models.sh / download_models.ps1  # 下载 FunASR 模型
+├── .python-version         # 固定 Python 3.12（torch cu121 无 3.13 的 Windows wheel）
+├── download_models.py      # 模型下载逻辑（被 download_models.ps1 调用）
+├── setup.ps1               # 一键安装
+├── start.ps1               # 启动所有服务
+├── stop.ps1                # 停止所有服务
+└── download_models.ps1     # 下载 FunASR 模型
 ```

@@ -4,51 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-本地部署的会议录音转文字 Web 应用，运行在 Windows 原生 或 WSL2/Linux + NVIDIA GPU 上。核心能力：中文/多语言语音转文字、说话人分离、音频回放同步高亮、热词提示、多 ASR 模型可切换、字幕翻译成中文、SRT/VTT 字幕导出（原文/中文/双语）。
+本地部署的会议录音转文字 Web 应用，**仅面向 Windows 原生环境**（Windows 10/11 + NVIDIA GPU），所有脚本都是 PowerShell，不再维护 Linux/WSL 的 `.sh` 版本。核心能力：中文/多语言语音转文字、说话人分离、音频回放同步高亮、热词提示、多 ASR 模型可切换、字幕翻译成中文、SRT/VTT 字幕导出（原文/中文/双语）。
 
 ## 启动与开发
-
-**Windows 原生（PowerShell）：**
 
 ```powershell
 .\setup.ps1              # 一次性安装（uv + Node.js + ffmpeg + 系统依赖）
 .\download_models.ps1    # 首次下载默认模型（可选，也可在前端「模型管理」里下载）
-.\start.ps1               # 启动所有服务（后台进程，立即返回）
-.\stop.ps1                # 停止所有服务
-```
-
-**WSL2 / Linux：**
-
-```bash
-./setup.sh
-./download_models.sh
-./start.sh                  # 阻塞终端，Ctrl+C 或另开终端 ./stop.sh 停止
-./stop.sh
+.\start.ps1              # 启动所有服务（后台进程，立即返回）
+.\stop.ps1               # 停止所有服务
 ```
 
 服务地址：前端 `http://localhost:5173`，后端 API `http://localhost:8000`
 
-### 单独启动某个服务（调试用，WSL/Linux 示例）
+### 单独启动某个服务（调试用）
 
-```bash
-source .venv/bin/activate
-export MODELSCOPE_CACHE="$(pwd)/data/models"
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:MODELSCOPE_CACHE = "$PWD\data\models"
 
 # 后端（转录/下载任务的后台线程随 FastAPI 启动事件自动拉起，无需单独进程）
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+cd backend; uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # 前端
-cd frontend && npm run dev
+cd frontend; npm run dev
 ```
 
 ### 查看运行日志
 
-```bash
-tail -f .logs/backend.log   # 最重要：转录进度、模型加载、下载、错误信息
-tail -f .logs/frontend.log
+```powershell
+Get-Content -Wait -Tail 50 .logs\backend.log   # 最重要：转录进度、模型加载、下载、错误信息
+Get-Content -Wait -Tail 50 .logs\frontend.log
 ```
 
-Windows 下用 `Get-Content -Wait -Tail 50 .logs\backend.log`。每次转录另有单独日志 `data/logs/{meeting_id}.log`，前端「处理日志」面板轮询展示。
+每次转录另有单独日志 `data/logs/{meeting_id}.log`，前端「处理日志」面板轮询展示。
 
 ## 技术栈
 
@@ -68,7 +57,7 @@ Windows 下用 `Get-Content -Wait -Tail 50 .logs\backend.log`。每次转录另�
 `backend/model_manager.py` 维护可选模型注册表（`MODELS` 字典）：
 
 - `firered-aed`（默认）：小红书 FireRedASR-AED，中文 CER 更低，从 HuggingFace 下载
-- `paraformer`：阿里 FunASR Paraformer-zh，与 `download_models.sh/.ps1` 下载的模型一致
+- `paraformer`：阿里 FunASR Paraformer-zh，与 `download_models.ps1` 下载的模型一致
 - `sensevoice-multilingual`：FunASR SenseVoice Small，支持中/英/日/韩/粤，非中文自动翻译（额外下载 opus-mt-en-zh）
 
 当前激活模型记录在 `data/config.json`（运行时生成，已 gitignore），各模型下载进度记录在 `data/download_status/{model_id}.json`（同样 gitignore，机器本地状态，不提交）。`backend/api/models.py` 暴露 `GET /api/models/`、`POST /api/models/{id}/download`、`POST /api/models/active`，前端 `ModelManager.jsx` 组件调用这些接口。上传接口会先检查当前激活模型是否已下载，未下载则拒绝并提示。
@@ -112,7 +101,7 @@ SenseVoice 流水线里的本地 opus-mt 翻译同样写入 `text_zh`（历史�
 ### 数据流
 
 - `DATA_DIR`（`database.py` 导出）是全局路径锚点，`worker.py`、`model_manager.py`、`api/meetings.py` 都从它构建子路径
-- 模型缓存：`data/models/`（通过 `MODELSCOPE_CACHE` 环境变量指定，`start.sh`/`start.ps1` 设置）
+- 模型缓存：`data/models/`（通过 `MODELSCOPE_CACHE` 环境变量指定，`start.ps1` 设置）
 - 音频文件：`data/uploads/{meeting_id}{ext}`
 - 处理日志：`data/logs/{meeting_id}.log`（worker 写入，前端轮询展示）
 - 数据库：`data/meetings.db`（SQLite）
@@ -142,7 +131,7 @@ HF_TOKEN=          # HuggingFace token（当前流程不需要，保留备用）
 HF_ENDPOINT=https://hf-mirror.com   # 国内下载模型可换镜像
 ```
 
-`MODELSCOPE_CACHE` 由 `start.sh`/`start.ps1` 在启动时设置，不放在 `.env` 里。
+`MODELSCOPE_CACHE` 由 `start.ps1` 在启动时设置，不放在 `.env` 里。
 
 ## 前端 API 约定
 

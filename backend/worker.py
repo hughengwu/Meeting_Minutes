@@ -424,7 +424,7 @@ def _download_firered(model_id: str, m: dict):
 
 
 def _download_paraformer(model_id: str, m: dict):
-    """通过 FunASR AutoModel 触发模型自动下载，与 download_models.sh 行为一致。"""
+    """通过 FunASR AutoModel 触发模型自动下载，与 download_models.ps1 行为一致。"""
     from funasr import AutoModel
     from model_manager import set_download_status
 
