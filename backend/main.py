@@ -13,7 +13,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 from api import jobs, meetings, models as model_api, translation
 from database import DATA_DIR, SessionLocal, init_db
 from models import Job, Meeting
-from worker import enqueue_task, enqueue_translate, start_worker
+from worker import VIDEO_EXTENSIONS, enqueue_task, enqueue_translate, start_worker
 
 app = FastAPI(title="会议记录")
 
@@ -30,7 +30,7 @@ app.include_router(model_api.router, prefix="/api/models")
 app.include_router(translation.router, prefix="/api/translation")
 
 UPLOAD_DIR = str(DATA_DIR / "uploads")
-_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm"}
+_VIDEO_EXTENSIONS = VIDEO_EXTENSIONS  # 定义在 worker.py，抽音轨的代码和白名单保持同源
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"} | _VIDEO_EXTENSIONS
 
 

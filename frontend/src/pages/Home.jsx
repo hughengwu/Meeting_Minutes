@@ -116,7 +116,13 @@ function matchFilter(m, filter) {
   return m.status === filter
 }
 
-const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm'])
+// 与后端 worker.py 的 VIDEO_EXTENSIONS 保持一致（跨语言没法共享，增删格式时两边都要改）
+const VIDEO_EXTS = new Set([
+  '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi',
+  '.wmv', '.asf', '.flv', '.f4v',
+  '.ts', '.m2ts', '.mts', '.mpg', '.mpeg', '.vob',
+  '.3gp', '.3g2', '.ogv', '.rm', '.rmvb',
+])
 function isVideo(filename) {
   const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase()
   return VIDEO_EXTS.has(ext)
@@ -325,7 +331,7 @@ export default function Home() {
             ref={fileRef}
             type="file"
             className="hidden"
-            accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.mkv,.avi,.mov,.webm"
+            accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.m4v,.mov,.mkv,.webm,.avi,.wmv,.asf,.flv,.f4v,.ts,.m2ts,.mts,.mpg,.mpeg,.vob,.3gp,.3g2,.ogv,.rm,.rmvb"
             onChange={(e) => pickFile(e.target.files[0])}
           />
         </div>
@@ -370,7 +376,7 @@ export default function Home() {
           >
             <div className="text-5xl mb-4">🎙️</div>
             <p className="text-gray-700 font-medium mb-1">拖拽音频或视频文件到此处</p>
-            <p className="text-gray-400 text-sm">音频：MP3 · WAV · M4A · FLAC · OGG　视频：MP4 · MKV · AVI · MOV</p>
+            <p className="text-gray-400 text-sm">音频：MP3 · WAV · M4A · FLAC · OGG　视频：MP4 · MOV · MKV · AVI · WMV · FLV · TS · MPG · RMVB 等</p>
           </div>
         )}
 

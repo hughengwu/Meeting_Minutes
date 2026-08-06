@@ -89,7 +89,10 @@
 
 首页点击「上传音频」，选择文件后弹出确认框。
 
-支持格式：`MP3` `WAV` `M4A` `FLAC` `OGG` `MP4` `MKV` `AVI` `MOV` `WEBM`（视频文件会自动提取音轨）
+支持格式（视频文件会自动用 ffmpeg 提取音轨，原视频不保留）：
+
+- 音频：`MP3` `WAV` `M4A` `FLAC` `OGG`
+- 视频：`MP4` `M4V` `MOV` `MKV` `WEBM` `AVI` `WMV` `ASF` `FLV` `F4V` `TS` `M2TS` `MTS` `MPG` `MPEG` `VOB` `3GP` `3G2` `OGV` `RM` `RMVB`
 
 ### 2. 选择处理方式
 

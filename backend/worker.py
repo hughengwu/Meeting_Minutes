@@ -16,6 +16,21 @@ from database import DATA_DIR
 LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# 需要先用 ffmpeg 抽音轨的容器格式。这里是唯一定义处，main.py 的上传白名单从这里取，
+# 两边分开维护过一次，结果加了格式只改一处就漏。前端 Home.jsx 里还有一份（跨语言没法共享），
+# 增删格式时记得一起改。
+# 每一个都实测过：造样本 → 跑下面那条抽音轨命令 → 得到可用 WAV。
+# 加新格式前请照做，光看 ffmpeg 文档说"支持"不够（有些封装只有解码器没有解复用器）。
+VIDEO_EXTENSIONS = {
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi",
+    ".wmv", ".asf",                       # Windows Media
+    ".flv", ".f4v",                       # Flash
+    ".ts", ".m2ts", ".mts",               # 传输流 / AVCHD 摄像机
+    ".mpg", ".mpeg", ".vob",              # MPEG-1/2、DVD
+    ".3gp", ".3g2",                       # 手机录像
+    ".ogv", ".rm", ".rmvb",               # Ogg、RealMedia
+}
+
 
 def _patch_sentencepiece_for_unicode_paths():
     """sentencepiece 的 Load(model_file=...) 底层调用 LoadFromFile()，在 Windows 上
@@ -140,8 +155,6 @@ def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords:
 
     write_log(f"[{datetime.now().strftime('%H:%M:%S')}] 任务开始 meeting={meeting_id}")
 
-    _VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm"}
-
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -153,7 +166,7 @@ def _process_audio_task(meeting_id: str, audio_path: str, job_id: str, hotwords:
 
         # 视频文件：先提取音轨为 WAV
         ext = os.path.splitext(audio_path)[1].lower()
-        if ext in _VIDEO_EXTS:
+        if ext in VIDEO_EXTENSIONS:
             write_log(f"[{datetime.now().strftime('%H:%M:%S')}] 提取视频音轨...")
             job.error_message = "提取视频音轨..."
             job.progress = 8
