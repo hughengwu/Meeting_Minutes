@@ -61,11 +61,19 @@ DEFAULT_SETTINGS: dict = {
 # 本地模型跑在同一张 GPU 上，串行小批量最稳妥。
 _GOOGLE_FREE_WORKERS = 4
 _GOOGLE_V2_BATCH = 64
-_LMSTUDIO_BATCH = 8
+# 本地小模型一次处理的条数越多越容易漏翻/串位（7B~14B 尤其明显），
+# 宁可多发几次请求：本地推理没有额度成本，准确率优先。
+_LMSTUDIO_BATCH = 4
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 _CJK_RE = re.compile(r"[一-鿿㐀-䶿]")
+
+# 日文汉字与中文汉字码位相同，无法靠汉字本身区分；但假名/谚文一旦出现就说明不是中文。
+# 平假名、片假名、半角片假名、谚文字母与音节。
+_NON_ZH_SCRIPT_RE = re.compile(
+    r"[぀-ゟ゠-ヿｦ-ﾝᄀ-ᇿ㄰-㆏가-힯]"
+)
 
 
 class TranslationError(RuntimeError):
@@ -171,6 +179,10 @@ def _needs_no_translation(text: str, target_lang: str) -> bool:
     """目标语是中文且原文已基本是中文（或纯数字符号）时，直接沿用原文，省掉一次请求。"""
     if not target_lang.lower().startswith("zh"):
         return False
+    # 含假名/谚文 → 是日文或韩文，汉字占比再高也必须翻译
+    # （如「誤って川に転落した七歳。」汉字占 6/11，只数汉字会被误判成中文）
+    if _NON_ZH_SCRIPT_RE.search(text):
+        return False
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return True
@@ -267,44 +279,200 @@ def lmstudio_list_models(settings: dict | None = None) -> list[str]:
     return [it.get("id", "") for it in (items or []) if it.get("id")]
 
 
+# 刻意不写「原文已是目标语言就原样返回」——那是给小模型的照抄许可证，它会拿来
+# 给漏翻的片段开脱。已经是目标语言的片段在 translate_texts 里就被挑掉了，
+# 真正发给模型的每一条都必须产出译文。
 _LMSTUDIO_SYSTEM = (
-    "你是专业的字幕翻译。把用户给出的每一条字幕翻译成{lang}，"
-    "只翻译、不解释、不合并、不拆分、不添加任何说明文字。"
-    "保持每条一一对应，输出严格的 JSON 数组，元素个数必须与输入条数完全一致，"
-    "形如 [\"译文1\", \"译文2\"]。原文若已经是目标语言，原样返回。"
+    "你是专业的字幕翻译引擎。把用户给出的每一条字幕翻译成{lang}。\n"
+    "规则：\n"
+    "1. 逐条翻译，输出条数与输入条数完全一致，顺序不变；\n"
+    "2. 不合并、不拆分、不补充解释或注释，不输出原文；\n"
+    "3. 字幕是口语片段，可能不完整，照直翻译即可，不要脑补上下文；\n"
+    "4. 无论原文是什么语言，每一条的输出都必须是{lang}，禁止原样照抄原文；\n"
+    "5. 人名、产品名、缩写等专有名词可保留原样，其余一律翻译；\n"
+    "6. 只输出 JSON，形如 {{\"translations\": [\"译文1\", \"译文2\"]}}，不要输出任何其他内容。"
 )
 
 _LANG_NAMES = {"zh-cn": "简体中文", "zh": "简体中文", "zh-tw": "繁体中文", "en": "英文", "ja": "日文", "ko": "韩文"}
 
+# 混合推理模型（qwen3 系列等）会把思维链塞进 content，里面的方括号会让 JSON 提取错位
+_THINK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.S | re.I)
+_UNCLOSED_THINK_RE = re.compile(r"^\s*<(?:think|thinking|reasoning)>.*", re.S | re.I)
+_NUM_PREFIX_RE = re.compile(r"^\s*\d+\s*[.、):：]\s*")
+
+
+def _strip_reasoning(content: str) -> str:
+    content = _THINK_RE.sub("", content or "")
+    # 输出被截断导致 </think> 没出现时，整段都是思维链，没有可用译文
+    if _UNCLOSED_THINK_RE.match(content):
+        return ""
+    return content.strip()
+
+
+def _clean_item(x) -> str:
+    s = str(x).strip()
+    s = _NUM_PREFIX_RE.sub("", s)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'“”":
+        s = s[1:-1].strip()
+    return s
+
+
+def _extract_json_arrays(text: str):
+    """扫描出所有括号配对完整的 JSON 数组（思维链里可能混着别的方括号）。"""
+    depth, start = 0, -1
+    in_str = escaped = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "]" and depth:
+            depth -= 1
+            if depth == 0:
+                yield text[start:i + 1]
+
 
 def _parse_lmstudio_reply(content: str, expected: int) -> list[str] | None:
-    content = content.strip()
+    content = _strip_reasoning(content)
+    if not content:
+        return None
     # 去掉可能的 ```json 包裹
     fence = re.search(r"```(?:json)?\s*(.+?)```", content, re.S)
     if fence:
         content = fence.group(1).strip()
 
-    start, end = content.find("["), content.rfind("]")
-    if start != -1 and end > start:
+    # 首选：{"translations": [...]}（结构化输出约定的形状）
+    obj_start, obj_end = content.find("{"), content.rfind("}")
+    if obj_start != -1 and obj_end > obj_start:
         try:
-            arr = json.loads(content[start:end + 1])
+            obj = json.loads(content[obj_start:obj_end + 1])
+            arr = obj.get("translations") if isinstance(obj, dict) else None
             if isinstance(arr, list) and len(arr) == expected:
-                return [str(x).strip() for x in arr]
-        except json.JSONDecodeError:
+                return [_clean_item(x) for x in arr]
+        except (json.JSONDecodeError, AttributeError):
             pass
 
+    # 次选：裸数组，取条数对得上的那一个
+    for chunk in _extract_json_arrays(content):
+        try:
+            arr = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(arr, list) and len(arr) == expected:
+            return [_clean_item(x) for x in arr]
+
     # 退化处理：按 "1. 译文" 或纯行解析
-    numbered = re.findall(r"^\s*\d+[.、)]\s*(.+)$", content, re.M)
+    numbered = re.findall(r"^\s*\d+\s*[.、):：]\s*(.+)$", content, re.M)
     if len(numbered) == expected:
-        return [x.strip() for x in numbered]
+        return [_clean_item(x) for x in numbered]
     lines = [l.strip() for l in content.splitlines() if l.strip()]
     if len(lines) == expected:
-        return lines
+        return [_clean_item(l) for l in lines]
     return None
 
 
+def _looks_untranslated(src: str, out: str | None, target: str) -> bool:
+    """判断模型是不是没真翻——空、原样回抄，或目标是中文却一个汉字都没有。"""
+    if not out or not out.strip():
+        return True
+    src, out = src.strip(), out.strip()
+    # 整条就是一个 ASCII 单词（产品名、缩写）时原样返回是正确译法，不算漏翻。
+    # 限定 ASCII 是为了不把「こんにちは」这类回抄也放过去。
+    if out == src and " " not in src and len(src) <= 24 and src.isascii():
+        return False
+    if out == src:
+        return True
+    if target.lower().startswith("zh"):
+        # 没有汉字，或残留假名/谚文（日韩原文没翻干净），都算漏翻
+        if not _CJK_RE.search(out) or _NON_ZH_SCRIPT_RE.search(out):
+            return True
+    return False
+
+
+def _lmstudio_schema(n: int) -> dict:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "subtitle_translations",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "translations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": n,
+                        "maxItems": n,
+                    },
+                },
+                "required": ["translations"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _lmstudio_once(texts: list[str], target: str, model: str, base: str,
+                   opener, settings: dict, timeout: int) -> list[str] | None:
+    """发一次请求并解析；解析不出对应条数时返回 None（由调用方决定怎么兜底）。"""
+    lang_name = _LANG_NAMES.get(target.lower(), target)
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "stream": False,
+        # 不设上限时部分 OpenAI 兼容服务会用很小的默认值，长字幕批次会被截断
+        "max_tokens": max(512, 200 * len(texts)),
+        "messages": [
+            {"role": "system", "content": _LMSTUDIO_SYSTEM.format(lang=lang_name)},
+            {"role": "user", "content": f"共 {len(texts)} 条字幕，请翻译：\n{numbered}"},
+        ],
+    }
+    # 可选增强：JSON Schema 强约束输出形状 + 关掉混合推理模型的思维链。
+    # 老版本 LM Studio 或其它兼容服务不认这两个字段，报 4xx 时自动去掉重试。
+    extras = {
+        "response_format": _lmstudio_schema(len(texts)),
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.get('lmstudio_api_key') or 'lm-studio'}",
+    }
+    url = f"{base}/chat/completions"
+
+    def post(extra: dict):
+        return _request_json(opener, url, data=json.dumps({**payload, **extra}).encode("utf-8"),
+                             headers=headers, timeout=timeout)
+
+    try:
+        data = post(extras)
+    except TranslationError as e:
+        if not re.search(r"HTTP 4\d\d", str(e)):
+            raise
+        data = post({})
+
+    try:
+        msg = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise TranslationError(f"LM Studio 返回结构异常: {str(data)[:200]}") from e
+
+    return _parse_lmstudio_reply(msg.get("content") or "", len(texts))
+
+
 def _lmstudio_translate(texts: list[str], target: str, settings: dict,
-                        timeout: int = 300) -> list[str]:
+                        timeout: int = 300) -> list[str | None]:
+    """批量翻译。没真正翻出来的位置返回 None，让调用方把它当失败留空、下次补翻。"""
     base = _lmstudio_base(settings["lmstudio_base_url"])
     model = (settings.get("lmstudio_model") or "").strip()
     if not model:
@@ -314,40 +482,28 @@ def _lmstudio_translate(texts: list[str], target: str, settings: dict,
         model = models[0]
 
     opener = _build_opener(settings["proxy"], bypass_proxy=_is_local_url(base))
-    lang_name = _LANG_NAMES.get(target.lower(), target)
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
 
-    body = json.dumps({
-        "model": model,
-        "temperature": 0.2,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": _LMSTUDIO_SYSTEM.format(lang=lang_name)},
-            {"role": "user", "content": f"共 {len(texts)} 条字幕，请翻译：\n{numbered}"},
-        ],
-    }).encode("utf-8")
+    parsed = _lmstudio_once(texts, target, model, base, opener, settings, timeout)
+    out: list[str | None] = list(parsed) if parsed is not None else [None] * len(texts)
 
-    data = _request_json(
-        opener, f"{base}/chat/completions", data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.get('lmstudio_api_key') or 'lm-studio'}",
-        },
-        timeout=timeout,
-    )
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as e:
-        raise TranslationError(f"LM Studio 返回结构异常: {str(data)[:200]}") from e
+    # 逐条兜底：批量里漏翻的（回抄原文/空/整条没有目标语言字符）单独重发一次。
+    # 小参数量模型一次处理多条时最容易漏，单条重试的命中率明显更高。
+    if len(texts) > 1:
+        for i, src in enumerate(texts):
+            if not _looks_untranslated(src, out[i], target):
+                continue
+            try:
+                single = _lmstudio_once([src], target, model, base, opener, settings, timeout)
+            except TranslationError:
+                single = None
+            out[i] = single[0] if single else None
 
-    parsed = _parse_lmstudio_reply(content, len(texts))
-    if parsed is not None:
-        return parsed
-
-    # 条数对不上就退回逐条翻译，宁可慢也不能错位
-    if len(texts) == 1:
-        return [content.strip()]
-    return [_lmstudio_translate([t], target, settings, timeout)[0] for t in texts]
+    # 重试后仍是原样回抄的，宁可留空：留空才会在下次点「翻译」时被补翻，
+    # 写回原文则会被当成"已翻译"永久固化下来。
+    for i, src in enumerate(texts):
+        if _looks_untranslated(src, out[i], target):
+            out[i] = None
+    return out
 
 
 # ── 对外入口 ──────────────────────────────────────────────────────────────────
@@ -366,7 +522,13 @@ def translate_one(text: str, settings: dict | None = None) -> str:
             raise TranslationError("未配置 Google Cloud Translation API Key")
         return _google_v2_translate([text], target, key, _build_opener(s["proxy"]))[0]
     if provider == "lmstudio":
-        return _lmstudio_translate([text], target, s)[0]
+        zh = _lmstudio_translate([text], target, s)[0]
+        if not zh:
+            raise TranslationError(
+                "模型没有返回有效译文（多半是把原文原样抄回来了）。"
+                "请确认 LM Studio 里加载的是指令/对话模型而非补全模型，或换一个更大的模型试试"
+            )
+        return zh
     raise TranslationError(f"未知的翻译服务: {provider}")
 
 
@@ -449,17 +611,27 @@ def translate_texts(
             bump(len(batch))
 
     elif provider == "lmstudio":
+        skipped = 0
         for b in range(0, len(todo), _LMSTUDIO_BATCH):
             batch = todo[b:b + _LMSTUDIO_BATCH]
             try:
                 out = _lmstudio_translate([texts[i] for i in batch], target, s)
+                miss = 0
                 for i, zh in zip(batch, out):
-                    results[i] = zh
+                    if zh and zh.strip():
+                        results[i] = zh
+                    else:
+                        miss += 1
+                failures += miss
+                skipped += miss
             except Exception as e:  # noqa: BLE001
                 failures += len(batch)
                 if log:
                     log(f"[警告] 批次翻译失败（{len(batch)} 条）: {e}")
             bump(len(batch))
+        if skipped and log:
+            log(f"[警告] {skipped} 条模型未翻出（重试后仍回抄原文或为空），已留空，"
+                f"再点一次「翻译成中文」只会补翻这部分")
 
     else:
         raise TranslationError(f"未知的翻译服务: {provider}")

@@ -96,6 +96,16 @@ worker 线程（GPU）：
 
 SenseVoice 流水线里的本地 opus-mt 翻译同样写入 `text_zh`（历史上它会覆盖 `text`，已改）。
 
+`_needs_no_translation()` 判断「已经是中文、不必发请求」时**必须先查假名/谚文**（`_NON_ZH_SCRIPT_RE`）：日文汉字与中文汉字码位完全相同，只统计汉字占比会把汉字密集的日文整句误判成中文而跳过翻译（实测「誤って川に転落した七歳。」汉字占 6/11 = 0.55，恰好越过 0.5 阈值）。纯汉字无假名的日文（如「七歳」）无法区分，只能接受。同一盲点在 `_looks_untranslated()` 里也要堵：译文里残留假名/谚文即视为没翻干净。
+
+**LM Studio 后端的防漏翻处理**（小参数量本地模型常见失效模式，改动前踩过）：
+
+- 系统提示词里**刻意不写**「原文已是目标语言就原样返回」——那等于给模型开了照抄的口子；已是目标语言的片段在 `translate_texts()` 里就被挑掉了，真正发出去的每条都必须产出译文
+- 请求带 `response_format` 的 JSON Schema（约束成 `{"translations": [...]}` 且 `minItems=maxItems=条数`）和 `chat_template_kwargs.enable_thinking=false`；不认这两个字段的服务会返回 4xx，`_lmstudio_once()` 检测到后去掉可选参数重发一次
+- 混合推理模型（qwen3 系列）的 `<think>` 块会混进 `content`，里面的方括号会让 JSON 提取错位：`_strip_reasoning()` 先剥离；未闭合的 `<think>`（输出被截断）直接判为无译文。`_extract_json_arrays()` 做括号配对扫描而不是 `find("[")`/`rfind("]")`
+- `_looks_untranslated()` 校验每条译文：空 / 原样回抄 / 目标是中文却一个汉字都没有 → 单条重发一次；仍不行就**留 None（留空），绝不把原文写进 `text_zh`**，否则会被当成"已翻译"永久固化，再点「翻译」也不会补翻。单个词的片段（`Kubernetes`、`API`）原样返回属于正确译法，不算漏翻
+- `_LMSTUDIO_BATCH = 4`（原来是 8）：本地推理没有额度成本，条数少漏翻率明显更低
+
 `backend/subtitle.py` 负责 SRT/VTT 生成：`build_cues()` 按显示宽度（CJK 记 2）和时长约束切分过长片段，英文断在词边界；双语字幕不切分（两种语言切分后容易错位）。
 
 ### 数据流
